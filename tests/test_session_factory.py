@@ -92,6 +92,27 @@ async def test_create_session_mounts_all_three_github_tools():
     assert "github_checkout_repo" in mounted_names
 
 
+async def test_create_session_mounts_launch_dtu_as_fourth_tool():
+    """create_session mounts launch_dtu as the 4th tool (in addition to the 3 GitHub tools).
+
+    Verifies that all four tools are mounted and the total count is exactly 4.
+    """
+    mock_bundle, _, mock_session = _make_mock_chain()
+    mock_load = AsyncMock(return_value=mock_bundle)
+
+    with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
+        await create_session(Path("/some/bundle"), github_token="test-token")
+
+    mounted_names = [
+        c.kwargs.get("name") for c in mock_session.coordinator.mount.call_args_list
+    ]
+    assert "launch_dtu" in mounted_names
+    assert "github_post_comment" in mounted_names
+    assert "github_add_label" in mounted_names
+    assert "github_checkout_repo" in mounted_names
+    assert len(mounted_names) == 4
+
+
 async def test_create_session_registers_session_spawn_capability():
     """create_session registers 'session.spawn' capability via coordinator.register_capability."""
     mock_bundle, _, mock_session = _make_mock_chain()

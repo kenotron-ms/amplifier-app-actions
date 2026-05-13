@@ -14,6 +14,7 @@ from amplifier_app_actions.tools.github_add_label import mount as mount_add_labe
 from amplifier_app_actions.tools.github_checkout_repo import (
     mount as mount_checkout_repo,
 )
+from amplifier_app_actions.tools.launch_dtu import mount as mount_launch_dtu
 from amplifier_app_actions.tools.github_post_comment import (
     mount as mount_post_comment,
 )
@@ -111,6 +112,7 @@ async def create_session(
     await mount_post_comment(session.coordinator, tool_config)
     await mount_add_label(session.coordinator, tool_config)
     await mount_checkout_repo(session.coordinator, tool_config)
+    await mount_launch_dtu(session.coordinator, tool_config)
 
     context_map = await _load_context_map()
     if context_map:
