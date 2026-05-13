@@ -46,26 +46,29 @@ runs:
     - name: Setup uv
       uses: astral-sh/setup-uv@v4
 
-    - name: Sync Python environment
+    - name: Set up Python environment
       shell: bash
-      run: uv sync --project ${{ github.action_path }}
+      run: |
+        echo "::group::uv sync"
+        uv sync --project ${{ github.action_path }}
+        echo "::endgroup::"
 
-    - name: Install Incus (Zabbly stable)
-      if: inputs.enable_reproduction == 'true'
-      shell: bash
-      run: curl https://pkgs.zabbly.com/get/incus-stable | sudo sh -x
-
-    - name: Fix Docker/Incus iptables conflict
-      if: inputs.enable_reproduction == 'true'
-      shell: bash
-      run: sudo nft flush ruleset
-
-    - name: Init Incus
+    - name: Set up Incus
       if: inputs.enable_reproduction == 'true'
       shell: bash
       run: |
+        echo "::group::Install Incus (Zabbly stable)"
+        curl https://pkgs.zabbly.com/get/incus-stable | sudo sh -x
+        echo "::endgroup::"
+
+        echo "::group::Fix Docker/Incus iptables conflict"
+        sudo nft flush ruleset
+        echo "::endgroup::"
+
+        echo "::group::Initialize Incus"
         sudo incus admin waitready
         sudo incus admin init --auto
+        echo "::endgroup::"
 
     - name: Run Amplifier action
       shell: bash
