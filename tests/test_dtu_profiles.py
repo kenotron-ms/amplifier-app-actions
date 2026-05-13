@@ -905,3 +905,287 @@ class TestTriageSandboxProfile:
         assert "assertions" not in profile, (
             "triage-sandbox must not have assertions — human reviews Gitea"
         )
+
+
+# ---------------------------------------------------------------------------
+# Generic dependency override: pypi_overrides + url_rewrites foundation rule
+# Tests for all four workspace validate-* profiles (task-6)
+# ---------------------------------------------------------------------------
+
+
+class TestGenericDepOverrideValidateRecipe:
+    """pypi_overrides block and foundation url_rewrite in validate-recipe.yaml."""
+
+    @pytest.fixture
+    def profile(self) -> dict:
+        return yaml.safe_load(
+            (_WORKSPACE_PROFILES_DIR / "validate-recipe.yaml").read_text()
+        )
+
+    def test_pypi_overrides_present(self, profile: dict) -> None:
+        """Profile must declare a pypi_overrides block."""
+        assert "pypi_overrides" in profile, "pypi_overrides block is missing"
+
+    def test_pypi_overrides_has_amplifier_core(self, profile: dict) -> None:
+        """pypi_overrides must include an amplifier-core package entry."""
+        packages = profile["pypi_overrides"]["packages"]
+        names = [p["name"] for p in packages]
+        assert "amplifier-core" in names, "pypi_overrides missing amplifier-core entry"
+
+    def test_amplifier_core_wheel_from_git(self, profile: dict) -> None:
+        """amplifier-core override uses wheel_from_git pointing to Gitea mirror."""
+        packages = profile["pypi_overrides"]["packages"]
+        core_pkg = next(p for p in packages if p["name"] == "amplifier-core")
+        wfg = core_pkg["wheel_from_git"]
+        assert "${GITEA_URL}/admin/amplifier-core.git" in wfg["repo"]
+        assert "${core_ref}" in wfg["ref"]
+
+    def test_url_rewrite_foundation_rule(self, profile: dict) -> None:
+        """url_rewrites must include a rule for amplifier-foundation."""
+        rules = profile["url_rewrites"]["rules"]
+        matches = [r["match"] for r in rules]
+        assert "github.com/microsoft/amplifier-foundation" in matches, (
+            "Missing url_rewrite rule for amplifier-foundation"
+        )
+
+    def test_url_rewrite_foundation_target(self, profile: dict) -> None:
+        """amplifier-foundation rule must redirect to local Gitea mirror."""
+        rules = profile["url_rewrites"]["rules"]
+        rule = next(
+            r for r in rules if r["match"] == "github.com/microsoft/amplifier-foundation"
+        )
+        assert "${GITEA_URL}/admin/amplifier-foundation" in rule["target"]
+
+
+class TestGenericDepOverrideValidateAttractor:
+    """pypi_overrides block and foundation url_rewrite in validate-attractor.yaml."""
+
+    @pytest.fixture
+    def profile(self) -> dict:
+        return yaml.safe_load(
+            (_WORKSPACE_PROFILES_DIR / "validate-attractor.yaml").read_text()
+        )
+
+    def test_pypi_overrides_present(self, profile: dict) -> None:
+        assert "pypi_overrides" in profile, "pypi_overrides block is missing"
+
+    def test_pypi_overrides_has_amplifier_core(self, profile: dict) -> None:
+        packages = profile["pypi_overrides"]["packages"]
+        names = [p["name"] for p in packages]
+        assert "amplifier-core" in names, "pypi_overrides missing amplifier-core entry"
+
+    def test_amplifier_core_wheel_from_git(self, profile: dict) -> None:
+        packages = profile["pypi_overrides"]["packages"]
+        core_pkg = next(p for p in packages if p["name"] == "amplifier-core")
+        wfg = core_pkg["wheel_from_git"]
+        assert "${GITEA_URL}/admin/amplifier-core.git" in wfg["repo"]
+        assert "${core_ref}" in wfg["ref"]
+
+    def test_url_rewrite_foundation_rule(self, profile: dict) -> None:
+        rules = profile["url_rewrites"]["rules"]
+        matches = [r["match"] for r in rules]
+        assert "github.com/microsoft/amplifier-foundation" in matches
+
+    def test_url_rewrite_foundation_target(self, profile: dict) -> None:
+        rules = profile["url_rewrites"]["rules"]
+        rule = next(
+            r for r in rules if r["match"] == "github.com/microsoft/amplifier-foundation"
+        )
+        assert "${GITEA_URL}/admin/amplifier-foundation" in rule["target"]
+
+
+# ---------------------------------------------------------------------------
+# Workspace-level profile: validate-multi-repo.yaml
+# ---------------------------------------------------------------------------
+
+
+class TestValidateMultiRepoProfile:
+    """Validates the workspace-level validate-multi-repo.yaml DTU profile."""
+
+    @pytest.fixture
+    def profile_path(self) -> Path:
+        return _WORKSPACE_PROFILES_DIR / "validate-multi-repo.yaml"
+
+    @pytest.fixture
+    def profile(self, profile_path: Path) -> dict:
+        return yaml.safe_load(profile_path.read_text())
+
+    def test_file_exists(self, profile_path: Path) -> None:
+        assert profile_path.exists(), (
+            f"validate-multi-repo.yaml not found at {profile_path}"
+        )
+
+    def test_valid_yaml(self, profile_path: Path) -> None:
+        content = yaml.safe_load(profile_path.read_text())
+        assert content is not None
+        assert isinstance(content, dict)
+
+    def test_name(self, profile: dict) -> None:
+        assert profile["name"] == "validate-multi-repo"
+
+    def test_base_image(self, profile: dict) -> None:
+        assert profile["base"]["image"] == "ubuntu:24.04"
+
+    def test_vars_declared(self, profile: dict) -> None:
+        var_names = {v["name"] for v in profile["vars"]}
+        assert "GITEA_URL" in var_names
+        assert "GITEA_TOKEN" in var_names
+        assert "core_ref" in var_names
+        assert "foundation_ref" in var_names
+
+    def test_core_ref_default_empty(self, profile: dict) -> None:
+        core_ref_var = next(v for v in profile["vars"] if v["name"] == "core_ref")
+        assert core_ref_var.get("default") == ""
+
+    def test_foundation_ref_default_empty(self, profile: dict) -> None:
+        foundation_ref_var = next(
+            v for v in profile["vars"] if v["name"] == "foundation_ref"
+        )
+        assert foundation_ref_var.get("default") == ""
+
+    def test_url_rewrite_app_actions_rule(self, profile: dict) -> None:
+        rules = profile["url_rewrites"]["rules"]
+        matches = [r["match"] for r in rules]
+        assert "github.com/microsoft/amplifier-app-actions" in matches
+
+    def test_url_rewrite_foundation_rule(self, profile: dict) -> None:
+        rules = profile["url_rewrites"]["rules"]
+        matches = [r["match"] for r in rules]
+        assert "github.com/microsoft/amplifier-foundation" in matches
+
+    def test_pypi_overrides_present(self, profile: dict) -> None:
+        assert "pypi_overrides" in profile
+
+    def test_pypi_overrides_has_amplifier_core(self, profile: dict) -> None:
+        packages = profile["pypi_overrides"]["packages"]
+        names = [p["name"] for p in packages]
+        assert "amplifier-core" in names
+
+    def test_amplifier_core_wheel_from_git(self, profile: dict) -> None:
+        packages = profile["pypi_overrides"]["packages"]
+        core_pkg = next(p for p in packages if p["name"] == "amplifier-core")
+        wfg = core_pkg["wheel_from_git"]
+        assert "${GITEA_URL}/admin/amplifier-core.git" in wfg["repo"]
+        assert "${core_ref}" in wfg["ref"]
+
+    def test_provision_creates_three_repos(self, profile: dict) -> None:
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "service-api" in cmds
+        assert "shared-lib" in cmds
+        assert "client-sdk" in cmds
+
+    def test_provision_uses_workspace_map(self, profile: dict) -> None:
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "workspace-map" in cmds or "TRIAGE_CONTEXT_MAP_PATH" in cmds
+
+    def test_provision_verifies_repo_names_in_comment(self, profile: dict) -> None:
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "service-api" in cmds
+        assert "validation.done" in cmds
+
+    def test_readiness_check(self, profile: dict) -> None:
+        readiness = profile["readiness"]
+        commands = [r.get("command", "") for r in readiness]
+        assert any("validation.done" in cmd for cmd in commands)
+
+
+# ---------------------------------------------------------------------------
+# Workspace-level profile: validate-prompt.yaml (generic dependency overrides)
+# ---------------------------------------------------------------------------
+
+
+class TestValidatePromptWorkspaceProfile:
+    """Validates the workspace-level validate-prompt.yaml DTU profile."""
+
+    @pytest.fixture
+    def profile_path(self) -> Path:
+        return _WORKSPACE_PROFILES_DIR / "validate-prompt.yaml"
+
+    @pytest.fixture
+    def profile(self, profile_path: Path) -> dict:
+        return yaml.safe_load(profile_path.read_text())
+
+    def test_file_exists(self, profile_path: Path) -> None:
+        assert profile_path.exists(), (
+            f"workspace validate-prompt.yaml not found at {profile_path}"
+        )
+
+    def test_valid_yaml(self, profile_path: Path) -> None:
+        content = yaml.safe_load(profile_path.read_text())
+        assert content is not None
+        assert isinstance(content, dict)
+
+    def test_name(self, profile: dict) -> None:
+        assert profile["name"] == "validate-prompt"
+
+    def test_base_image(self, profile: dict) -> None:
+        assert profile["base"]["image"] == "ubuntu:24.04"
+
+    def test_vars_declared(self, profile: dict) -> None:
+        var_names = {v["name"] for v in profile["vars"]}
+        assert "GITEA_URL" in var_names
+        assert "GITEA_TOKEN" in var_names
+        assert "core_ref" in var_names
+        assert "foundation_ref" in var_names
+
+    def test_core_ref_default_empty(self, profile: dict) -> None:
+        core_ref_var = next(v for v in profile["vars"] if v["name"] == "core_ref")
+        assert core_ref_var.get("default") == ""
+
+    def test_foundation_ref_default_empty(self, profile: dict) -> None:
+        foundation_ref_var = next(
+            v for v in profile["vars"] if v["name"] == "foundation_ref"
+        )
+        assert foundation_ref_var.get("default") == ""
+
+    def test_passthrough_anthropic_service(self, profile: dict) -> None:
+        services = profile["passthrough"]["services"]
+        service_names = [s["name"] for s in services]
+        assert "anthropic" in service_names
+
+    def test_url_rewrite_app_actions_rule(self, profile: dict) -> None:
+        rules = profile["url_rewrites"]["rules"]
+        matches = [r["match"] for r in rules]
+        assert "github.com/microsoft/amplifier-app-actions" in matches
+
+    def test_url_rewrite_foundation_rule(self, profile: dict) -> None:
+        """Foundation url_rewrite rule must be present (generic dep override pattern)."""
+        rules = profile["url_rewrites"]["rules"]
+        matches = [r["match"] for r in rules]
+        assert "github.com/microsoft/amplifier-foundation" in matches
+
+    def test_pypi_overrides_present(self, profile: dict) -> None:
+        """pypi_overrides block must exist."""
+        assert "pypi_overrides" in profile
+
+    def test_pypi_overrides_has_amplifier_core(self, profile: dict) -> None:
+        packages = profile["pypi_overrides"]["packages"]
+        names = [p["name"] for p in packages]
+        assert "amplifier-core" in names
+
+    def test_amplifier_core_wheel_from_git(self, profile: dict) -> None:
+        packages = profile["pypi_overrides"]["packages"]
+        core_pkg = next(p for p in packages if p["name"] == "amplifier-core")
+        wfg = core_pkg["wheel_from_git"]
+        assert "${GITEA_URL}/admin/amplifier-core.git" in wfg["repo"]
+        assert "${core_ref}" in wfg["ref"]
+
+    def test_provision_creates_gitea_test_data(self, profile: dict) -> None:
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "test-org" in cmds
+        assert "test-repo" in cmds
+
+    def test_provision_installs_amplifier_triage(self, profile: dict) -> None:
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "uv tool install" in cmds
+        assert "amplifier-app-actions" in cmds
+
+    def test_provision_verifies_comment_count(self, profile: dict) -> None:
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "COMMENT_COUNT" in cmds
+        assert "validation.done" in cmds
+
+    def test_readiness_check(self, profile: dict) -> None:
+        readiness = profile["readiness"]
+        commands = [r.get("command", "") for r in readiness]
+        assert any("validation.done" in cmd for cmd in commands)
