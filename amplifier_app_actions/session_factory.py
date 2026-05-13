@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from pathlib import Path
 from typing import Any
 
+import httpx
 from amplifier_foundation import load_bundle
 
 from amplifier_app_actions.tools.github_add_label import mount as mount_add_label
@@ -14,6 +17,39 @@ from amplifier_app_actions.tools.github_checkout_repo import (
 from amplifier_app_actions.tools.github_post_comment import (
     mount as mount_post_comment,
 )
+
+_log = logging.getLogger(__name__)
+
+_DEFAULT_CONTEXT_MAP_URL = (
+    "https://raw.githubusercontent.com/microsoft/amplifier/main/MODULES.md"
+)
+
+
+async def _load_context_map() -> str:
+    """Load the project workspace map from a local file or remote URL.
+
+    If TRIAGE_CONTEXT_MAP_PATH env var is set, reads from disk.
+    Otherwise fetches from _DEFAULT_CONTEXT_MAP_URL.
+    Returns an empty string on any failure (non-fatal).
+    """
+    env_path = os.environ.get("TRIAGE_CONTEXT_MAP_PATH", "")
+    if env_path:
+        try:
+            return Path(env_path).read_text(encoding="utf-8")
+        except OSError as exc:
+            _log.warning("Could not read TRIAGE_CONTEXT_MAP_PATH %r: %s", env_path, exc)
+            return ""
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(_DEFAULT_CONTEXT_MAP_URL)
+            response.raise_for_status()
+            return response.text
+    except Exception as exc:  # noqa: BLE001
+        _log.debug(
+            "Could not fetch context map from %r: %s", _DEFAULT_CONTEXT_MAP_URL, exc
+        )
+        return ""
 
 
 async def create_session(
@@ -62,5 +98,17 @@ async def create_session(
     await mount_post_comment(session.coordinator, tool_config)
     await mount_add_label(session.coordinator, tool_config)
     await mount_checkout_repo(session.coordinator, tool_config)
+
+    context_map = await _load_context_map()
+    if context_map:
+        session.config["initial_context"] = (
+            "# Project Workspace Map\n\n"
+            "The following describes all known repos in this project's ecosystem. "
+            "Use this to determine which repos are relevant when investigating "
+            "cross-repo issues.\n\n" + context_map
+        )
+        _log.debug(
+            "Injected context map into session config (%d chars)", len(context_map)
+        )
 
     return session

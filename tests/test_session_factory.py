@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -178,3 +179,35 @@ async def test_no_provider_skips_bundle_providers_override():
 
     # providers should NOT have been replaced with a plain list when no provider given
     assert providers_was_list_before_prepare == [False]
+
+
+# ---------------------------------------------------------------------------
+# Context map injection tests
+# ---------------------------------------------------------------------------
+
+
+async def test_create_session_injects_context_map_from_env_path(tmp_path):
+    """TRIAGE_CONTEXT_MAP_PATH env var causes context map file to be injected into session config."""
+    # Create a workspace map file
+    map_file = tmp_path / "workspace-map.md"
+    map_file.write_text(
+        "# Test Workspace Map\n\n- service-api: REST API service\n- shared-lib: shared validation\n"
+    )
+
+    mock_bundle, _, mock_session = _make_mock_chain()
+    # Give the session a real config dict so we can inspect it after injection
+    mock_session.config = {}
+    mock_load = AsyncMock(return_value=mock_bundle)
+
+    with (
+        patch("amplifier_app_actions.session_factory.load_bundle", mock_load),
+        patch.dict(os.environ, {"TRIAGE_CONTEXT_MAP_PATH": str(map_file)}),
+    ):
+        result = await create_session(
+            bundle_path=Path("/fake/bundle.md"), github_token="test-token"
+        )
+
+    assert (
+        "Test Workspace Map" in str(result.config)
+        or "service-api" in str(result.config).lower()
+    )
