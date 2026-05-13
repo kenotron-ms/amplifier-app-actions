@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import json
+from unittest.mock import MagicMock, patch
+
+import pytest
+
 from amplifier_app_actions.tools.launch_dtu import (
     LaunchDTUTool,  # noqa: F401
     _is_sha,  # noqa: F401
@@ -124,3 +129,139 @@ def test_no_ref_uses_depth_only():
     )
     assert "--depth 1" in profile
     assert "--branch" not in profile
+
+
+# ---------------------------------------------------------------------------
+# execute() tests — happy path
+# ---------------------------------------------------------------------------
+
+
+def _make_proc(stdout: str = "", stderr: str = "", returncode: int = 0) -> MagicMock:
+    """Return a mock subprocess.CompletedProcess-like object."""
+    p = MagicMock()
+    p.stdout = stdout
+    p.stderr = stderr
+    p.returncode = returncode
+    return p
+
+
+@pytest.mark.asyncio
+async def test_execute_lifecycle_ordering():
+    """launch is called first, exec per command in the middle, destroy called last."""
+    tool = LaunchDTUTool({})
+    call_sequence: list[str] = []
+
+    async def fake_to_thread(fn, cmd, **kwargs):
+        subcommand = cmd[1]  # "launch" | "exec" | "destroy"
+        call_sequence.append(subcommand)
+        if subcommand == "launch":
+            return _make_proc(stdout=json.dumps({"instance_id": "dtu-abc123"}))
+        elif subcommand == "exec":
+            return _make_proc(stdout="out\n")
+        return _make_proc()
+
+    with patch("asyncio.to_thread", side_effect=fake_to_thread):
+        await tool.execute(
+            {"repos": ["myorg/myrepo"], "commands": ["echo hello", "echo world"]}
+        )
+
+    assert call_sequence[0] == "launch"
+    assert call_sequence[-1] == "destroy"
+    # Both commands produced exactly one "exec" call each
+    assert call_sequence.count("exec") == 2
+
+
+@pytest.mark.asyncio
+async def test_execute_launch_includes_format_json():
+    """The launch command includes '--format' 'json' flags."""
+    tool = LaunchDTUTool({})
+    launch_cmd_captured: list[str] = []
+
+    async def fake_to_thread(fn, cmd, **kwargs):
+        if cmd[1] == "launch":
+            launch_cmd_captured.extend(cmd)
+            return _make_proc(stdout=json.dumps({"instance_id": "dtu-xyz"}))
+        elif cmd[1] == "exec":
+            return _make_proc()
+        return _make_proc()
+
+    with patch("asyncio.to_thread", side_effect=fake_to_thread):
+        await tool.execute({"repos": ["myorg/myrepo"], "commands": ["echo hi"]})
+
+    assert "--format" in launch_cmd_captured
+    assert "json" in launch_cmd_captured
+
+
+@pytest.mark.asyncio
+async def test_execute_one_exec_per_command():
+    """execute() dispatches exactly one exec call per command string."""
+    tool = LaunchDTUTool({})
+    exec_bash_args: list[str] = []
+
+    async def fake_to_thread(fn, cmd, **kwargs):
+        if cmd[1] == "launch":
+            return _make_proc(stdout=json.dumps({"instance_id": "dtu-123"}))
+        elif cmd[1] == "exec":
+            # The bash -c argument is the last element
+            exec_bash_args.append(cmd[-1])
+            return _make_proc()
+        return _make_proc()
+
+    commands = ["ls /", "pwd", "whoami"]
+    with patch("asyncio.to_thread", side_effect=fake_to_thread):
+        await tool.execute({"repos": ["myorg/myrepo"], "commands": commands})
+
+    assert len(exec_bash_args) == len(commands)
+    assert exec_bash_args == commands
+
+
+@pytest.mark.asyncio
+async def test_execute_output_structure():
+    """ToolResult.output contains instance_id and outputs list with correct keys."""
+    tool = LaunchDTUTool({})
+    expected_id = "dtu-output-test"
+
+    async def fake_to_thread(fn, cmd, **kwargs):
+        if cmd[1] == "launch":
+            return _make_proc(stdout=json.dumps({"instance_id": expected_id}))
+        elif cmd[1] == "exec":
+            return _make_proc(stdout="hello\n", stderr="warn\n", returncode=0)
+        return _make_proc()
+
+    with patch("asyncio.to_thread", side_effect=fake_to_thread):
+        result = await tool.execute(
+            {"repos": ["myorg/myrepo"], "commands": ["echo hello"]}
+        )
+
+    assert result.success is True
+    assert isinstance(result.output, dict)
+    assert result.output["instance_id"] == expected_id
+    assert isinstance(result.output["outputs"], list)
+    assert len(result.output["outputs"]) == 1
+
+    item = result.output["outputs"][0]
+    assert item["command"] == "echo hello"
+    assert item["stdout"] == "hello\n"
+    assert item["stderr"] == "warn\n"
+    assert item["returncode"] == 0
+
+
+@pytest.mark.asyncio
+async def test_execute_success_false_on_nonzero_returncode():
+    """success=False when any exec command returns a non-zero returncode."""
+    tool = LaunchDTUTool({})
+
+    async def fake_to_thread(fn, cmd, **kwargs):
+        if cmd[1] == "launch":
+            return _make_proc(stdout=json.dumps({"instance_id": "dtu-fail"}))
+        elif cmd[1] == "exec":
+            return _make_proc(stderr="error output\n", returncode=1)
+        return _make_proc()
+
+    with patch("asyncio.to_thread", side_effect=fake_to_thread):
+        result = await tool.execute(
+            {"repos": ["myorg/myrepo"], "commands": ["failing-cmd"]}
+        )
+
+    assert result.success is False
+    assert result.output["outputs"][0]["returncode"] == 1

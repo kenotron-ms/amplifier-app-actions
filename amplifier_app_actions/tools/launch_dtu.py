@@ -122,15 +122,11 @@ class LaunchDTUTool:
         str
             A YAML string suitable for use as a DTU profile.
         """
-        setup_cmds: list[str] = [
-            "apt-get update -qq && apt-get install -y -q git"
-        ]
+        setup_cmds: list[str] = ["apt-get update -qq && apt-get install -y -q git"]
 
         for spec in repos:
             owner, repo, ref = _parse_repo(spec)
-            url = (
-                f"https://x-access-token:${{GITHUB_TOKEN}}@github.com/{owner}/{repo}"
-            )
+            url = f"https://x-access-token:${{GITHUB_TOKEN}}@github.com/{owner}/{repo}"
             dest = f"/workspace/{repo}"
 
             if ref is None:
@@ -158,10 +154,86 @@ class LaunchDTUTool:
             f"{commands_yaml}\n"
         )
 
-    async def execute(
-        self, input_data: dict[str, Any]
-    ) -> ToolResult:  # pragma: no cover
-        raise NotImplementedError
+    async def execute(self, input_data: dict[str, Any]) -> ToolResult:
+        repos: list[str] = input_data.get("repos", [])
+        commands: list[str] = input_data.get("commands", [])
+
+        profile_yaml = self._generate_profile(repos, commands)
+        profile_path = f"/tmp/dtu-repro-{uuid4()}.yaml"
+        Path(profile_path).write_text(profile_yaml)
+
+        instance_id: str | None = None
+        outputs: list[dict[str, Any]] = []
+
+        try:
+            # 1. Launch
+            try:
+                launch_result = await asyncio.to_thread(
+                    subprocess.run,
+                    [
+                        "amplifier-digital-twin",
+                        "launch",
+                        profile_path,
+                        "--format",
+                        "json",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+            except subprocess.CalledProcessError as exc:
+                safe_stderr = re.sub(
+                    r"x-access-token:[^@]+@",
+                    "x-access-token:***@",
+                    exc.stderr or "",
+                )
+                return ToolResult(
+                    success=False,
+                    output=safe_stderr,
+                    error={"returncode": exc.returncode, "stderr": exc.stderr},
+                )
+
+            instance_id = json.loads(launch_result.stdout)["instance_id"]
+
+            # 2. Exec each command
+            for cmd in commands:
+                exec_result = await asyncio.to_thread(
+                    subprocess.run,
+                    [
+                        "amplifier-digital-twin",
+                        "exec",
+                        instance_id,
+                        "--",
+                        "bash",
+                        "-c",
+                        cmd,
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+                outputs.append(
+                    {
+                        "command": cmd,
+                        "stdout": exec_result.stdout,
+                        "stderr": exec_result.stderr,
+                        "returncode": exec_result.returncode,
+                    }
+                )
+
+            return ToolResult(
+                success=all(o["returncode"] == 0 for o in outputs),
+                output={"instance_id": instance_id, "outputs": outputs},
+            )
+
+        finally:
+            if instance_id is not None:
+                await asyncio.to_thread(
+                    subprocess.run,
+                    ["amplifier-digital-twin", "destroy", instance_id],
+                    capture_output=True,
+                    text=True,
+                )
+            Path(profile_path).unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
