@@ -1182,3 +1182,57 @@ class TestValidatePromptWorkspaceProfile:
         readiness = profile["readiness"]
         commands = [r.get("command", "") for r in readiness]
         assert any("validation.done" in cmd for cmd in commands)
+
+
+# ---------------------------------------------------------------------------
+# action.yml: enable_reproduction input + conditional Incus bootstrap steps
+# ---------------------------------------------------------------------------
+
+
+class TestActionYml:
+    """Validates enable_reproduction input and conditional Incus bootstrap steps in action.yml."""
+
+    @pytest.fixture(scope="class")
+    def action(self) -> dict:
+        """Parse and return the action.yml from the repo root."""
+        action_path = _REPO_ROOT / "action.yml"
+        return yaml.safe_load(action_path.read_text())
+
+    def test_enable_reproduction_input_exists(self, action: dict) -> None:
+        """action.yml inputs must include enable_reproduction key."""
+        assert "enable_reproduction" in action["inputs"]
+
+    def test_enable_reproduction_default_is_false(self, action: dict) -> None:
+        """enable_reproduction default must be the string 'false' (not bool)."""
+        default = action["inputs"]["enable_reproduction"]["default"]
+        assert default == "false"
+
+    def test_conditional_steps_exist(self, action: dict) -> None:
+        """At least one step must be gated with if: inputs.enable_reproduction == 'true'."""
+        steps = action["runs"]["steps"]
+        conditional = [
+            s for s in steps if s.get("if") == "inputs.enable_reproduction == 'true'"
+        ]
+        assert len(conditional) >= 1
+
+    def test_iptables_fix_step_present(self, action: dict) -> None:
+        """A conditional step must contain 'nft flush ruleset'."""
+        steps = action["runs"]["steps"]
+        conditional_runs = [
+            s.get("run", "")
+            for s in steps
+            if s.get("if") == "inputs.enable_reproduction == 'true'"
+        ]
+        combined = " ".join(conditional_runs)
+        assert "nft flush ruleset" in combined
+
+    def test_incus_init_step_present(self, action: dict) -> None:
+        """A conditional step must contain 'incus admin init'."""
+        steps = action["runs"]["steps"]
+        conditional_runs = [
+            s.get("run", "")
+            for s in steps
+            if s.get("if") == "inputs.enable_reproduction == 'true'"
+        ]
+        combined = " ".join(conditional_runs)
+        assert "incus admin init" in combined

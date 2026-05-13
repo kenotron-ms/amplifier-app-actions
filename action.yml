@@ -31,6 +31,14 @@ inputs:
     description: 'GitHub token for API calls (defaults to GITHUB_TOKEN)'
     required: false
     default: '${{ github.token }}'
+  enable_reproduction:
+    description: >-
+      Install Incus on the runner for container-based reproduction environments.
+      Requires ubuntu-latest full VM runner (not container-based). Ubuntu 24.04
+      ships Incus 6.0.0 which has an AppArmor bug blocking dockerd; this step
+      installs from the Zabbly stable channel instead.
+    required: false
+    default: 'false'
 
 runs:
   using: 'composite'
@@ -41,6 +49,23 @@ runs:
     - name: Sync Python environment
       shell: bash
       run: uv sync --project ${{ github.action_path }}
+
+    - name: Install Incus (Zabbly stable)
+      if: inputs.enable_reproduction == 'true'
+      shell: bash
+      run: curl https://pkgs.zabbly.com/get/incus-stable | sudo sh -x
+
+    - name: Fix Docker/Incus iptables conflict
+      if: inputs.enable_reproduction == 'true'
+      shell: bash
+      run: sudo nft flush ruleset
+
+    - name: Init Incus
+      if: inputs.enable_reproduction == 'true'
+      shell: bash
+      run: |
+        sudo incus admin waitready
+        sudo incus admin init --auto
 
     - name: Run Amplifier action
       shell: bash
