@@ -453,3 +453,275 @@ class TestValidateRecipeProfile:
         assert any("validation.done" in cmd for cmd in commands), (
             "No readiness check tests for /root/validation.done"
         )
+
+
+# ---------------------------------------------------------------------------
+# Workspace-level fixture: triage.dot
+# ---------------------------------------------------------------------------
+
+
+class TestTriageDotFixture:
+    """Validates the workspace-level triage.dot attractor fixture structure."""
+
+    @pytest.fixture
+    def fixture_path(self) -> Path:
+        return _WORKSPACE_FIXTURES_DIR / "triage.dot"
+
+    @pytest.fixture
+    def dot_content(self, fixture_path: Path) -> str:
+        return fixture_path.read_text()
+
+    def test_file_exists(self, fixture_path: Path) -> None:
+        assert fixture_path.exists(), f"triage.dot not found at {fixture_path}"
+
+    def test_is_digraph_named_triage(self, dot_content: str) -> None:
+        """File must be a digraph named 'triage'."""
+        assert "digraph triage" in dot_content, "Expected 'digraph triage' declaration"
+
+    def test_has_label(self, dot_content: str) -> None:
+        """Graph must have a label containing 'Issue Triage Attractor'."""
+        assert "Issue Triage Attractor" in dot_content, (
+            "Expected graph label 'Issue Triage Attractor (DTU Test)'"
+        )
+
+    def test_has_rankdir_tb(self, dot_content: str) -> None:
+        """Graph must declare rankdir=TB."""
+        assert "rankdir" in dot_content and "TB" in dot_content, (
+            "Expected rankdir=TB in graph attributes"
+        )
+
+    def test_has_classify_node(self, dot_content: str) -> None:
+        """Graph must declare a 'classify' node."""
+        assert "classify" in dot_content, "Expected 'classify' node in DOT graph"
+
+    def test_has_report_node(self, dot_content: str) -> None:
+        """Graph must declare a 'report' node."""
+        assert "report" in dot_content, "Expected 'report' node in DOT graph"
+
+    def test_classify_has_label(self, dot_content: str) -> None:
+        """Classify node must have label 'Classify Issue'."""
+        assert "Classify Issue" in dot_content, (
+            "Expected classify node label 'Classify Issue'"
+        )
+
+    def test_report_has_label(self, dot_content: str) -> None:
+        """Report node must have label 'Post Report'."""
+        assert "Post Report" in dot_content, "Expected report node label 'Post Report'"
+
+    def test_classify_has_description(self, dot_content: str) -> None:
+        """Classify node must have a description mentioning github_add_label."""
+        assert "github_add_label" in dot_content, (
+            "Expected classify node description mentioning github_add_label"
+        )
+
+    def test_report_has_description(self, dot_content: str) -> None:
+        """Report node must have a description mentioning github_post_comment."""
+        assert "github_post_comment" in dot_content, (
+            "Expected report node description mentioning github_post_comment"
+        )
+
+    def test_edge_classify_to_report(self, dot_content: str) -> None:
+        """Graph must have edge from classify to report."""
+        assert "classify -> report" in dot_content, "Expected edge 'classify -> report'"
+
+    def test_valid_dot_syntax(self, dot_content: str) -> None:
+        """File must have balanced braces."""
+        assert "{" in dot_content and "}" in dot_content, (
+            "Expected opening and closing braces in DOT file"
+        )
+        open_count = dot_content.count("{")
+        close_count = dot_content.count("}")
+        assert open_count == close_count, (
+            f"Unbalanced braces: {open_count} open, {close_count} close"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Workspace-level profile: validate-attractor.yaml
+# ---------------------------------------------------------------------------
+
+
+class TestValidateAttractorProfile:
+    """Validates the workspace-level validate-attractor.yaml DTU profile."""
+
+    @pytest.fixture
+    def profile_path(self) -> Path:
+        return _WORKSPACE_PROFILES_DIR / "validate-attractor.yaml"
+
+    @pytest.fixture
+    def profile(self, profile_path: Path) -> dict:
+        """Parse and return the profile YAML."""
+        return yaml.safe_load(profile_path.read_text())
+
+    def test_file_exists(self, profile_path: Path) -> None:
+        assert profile_path.exists(), (
+            f"validate-attractor.yaml not found at {profile_path}"
+        )
+
+    def test_valid_yaml(self, profile_path: Path) -> None:
+        """Profile must be parseable YAML (no syntax errors)."""
+        content = yaml.safe_load(profile_path.read_text())
+        assert content is not None
+        assert isinstance(content, dict)
+
+    def test_name(self, profile: dict) -> None:
+        assert profile["name"] == "validate-attractor"
+
+    def test_base_image(self, profile: dict) -> None:
+        assert profile["base"]["image"] == "ubuntu:24.04"
+
+    def test_vars_declared(self, profile: dict) -> None:
+        """GITEA_URL and GITEA_TOKEN must be required; core_ref and foundation_ref optional."""
+        vars_list = profile["vars"]
+        var_names = {v["name"] for v in vars_list}
+        assert "GITEA_URL" in var_names, "GITEA_URL var not declared"
+        assert "GITEA_TOKEN" in var_names, "GITEA_TOKEN var not declared"
+        assert "core_ref" in var_names, "core_ref var not declared"
+        assert "foundation_ref" in var_names, "foundation_ref var not declared"
+
+    def test_gitea_url_required(self, profile: dict) -> None:
+        gitea_url_var = next(v for v in profile["vars"] if v["name"] == "GITEA_URL")
+        assert gitea_url_var.get("required") is True
+
+    def test_gitea_token_required(self, profile: dict) -> None:
+        gitea_token_var = next(v for v in profile["vars"] if v["name"] == "GITEA_TOKEN")
+        assert gitea_token_var.get("required") is True
+
+    def test_core_ref_default_empty(self, profile: dict) -> None:
+        core_ref_var = next(v for v in profile["vars"] if v["name"] == "core_ref")
+        assert core_ref_var.get("default") == ""
+
+    def test_foundation_ref_default_empty(self, profile: dict) -> None:
+        foundation_ref_var = next(
+            v for v in profile["vars"] if v["name"] == "foundation_ref"
+        )
+        assert foundation_ref_var.get("default") == ""
+
+    def test_passthrough_allow_external(self, profile: dict) -> None:
+        assert profile["passthrough"]["allow_external"] is True
+
+    def test_passthrough_anthropic_service(self, profile: dict) -> None:
+        services = profile["passthrough"]["services"]
+        service_names = [s["name"] for s in services]
+        assert "anthropic" in service_names
+
+    def test_anthropic_key_env(self, profile: dict) -> None:
+        anthropic = next(
+            s for s in profile["passthrough"]["services"] if s["name"] == "anthropic"
+        )
+        assert anthropic["key_env"] == "ANTHROPIC_API_KEY"
+
+    def test_url_rewrites_auth(self, profile: dict) -> None:
+        auth = profile["url_rewrites"]["auth"]
+        assert auth["username"] == "admin"
+        assert auth["token_var"] == "GITEA_TOKEN"
+
+    def test_url_rewrites_no_fast_path(self, profile: dict) -> None:
+        assert profile["url_rewrites"]["allow_uv_github_fast_path"] is False
+
+    def test_url_rewrites_boundary_mode(self, profile: dict) -> None:
+        assert profile["url_rewrites"]["default_match_mode"] == "boundary"
+
+    def test_url_rewrite_app_actions_rule(self, profile: dict) -> None:
+        rules = profile["url_rewrites"]["rules"]
+        matches = [r["match"] for r in rules]
+        assert "github.com/microsoft/amplifier-app-actions" in matches
+
+    def test_url_rewrite_app_actions_target(self, profile: dict) -> None:
+        rules = profile["url_rewrites"]["rules"]
+        rule = next(
+            r
+            for r in rules
+            if r["match"] == "github.com/microsoft/amplifier-app-actions"
+        )
+        assert "${GITEA_URL}/admin/amplifier-app-actions" in rule["target"]
+
+    def test_provision_has_setup_cmds(self, profile: dict) -> None:
+        assert "setup_cmds" in profile["provision"]
+        assert len(profile["provision"]["setup_cmds"]) >= 5, (
+            "Expected at least 5 setup_cmds steps"
+        )
+
+    def test_provision_installs_deps(self, profile: dict) -> None:
+        """First setup cmd must install system dependencies including jq."""
+        first_cmd = profile["provision"]["setup_cmds"][0]
+        assert "apt-get" in first_cmd
+        assert "jq" in first_cmd
+
+    def test_provision_installs_uv(self, profile: dict) -> None:
+        """One setup cmd installs uv via the official installer script."""
+        cmds = profile["provision"]["setup_cmds"]
+        assert any("astral.sh/uv" in cmd for cmd in cmds), (
+            "No step installs uv via astral.sh"
+        )
+
+    def test_provision_creates_attractor_test_repo(self, profile: dict) -> None:
+        """One step creates test-org and attractor-test-repo in Gitea."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "test-org" in cmds
+        assert "attractor-test-repo" in cmds
+
+    def test_provision_creates_issue_with_connection_pool_title(
+        self, profile: dict
+    ) -> None:
+        """Issue #1 must mention 'Connection pool' in its title."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "Connection pool" in cmds or "connection pool" in cmds.lower()
+
+    def test_provision_creates_labels_including_performance(
+        self, profile: dict
+    ) -> None:
+        """Setup step must create labels including bug and performance."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "bug" in cmds
+        assert "performance" in cmds
+
+    def test_provision_installs_amplifier_triage(self, profile: dict) -> None:
+        """One step installs amplifier-app-actions via uv tool install."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "uv tool install" in cmds
+        assert "amplifier-app-actions" in cmds
+
+    def test_provision_writes_dot_file_via_heredoc(self, profile: dict) -> None:
+        """One step writes the attractor DOT to /root/triage.dot via DOTEOF heredoc."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "triage.dot" in cmds
+        assert "DOTEOF" in cmds
+
+    def test_provision_writes_event_json_for_attractor_repo(
+        self, profile: dict
+    ) -> None:
+        """One step writes event.json referencing attractor-test-repo."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "event.json" in cmds
+        assert "attractor-test-repo" in cmds
+
+    def test_provision_runs_amplifier_triage_attractor_mode(
+        self, profile: dict
+    ) -> None:
+        """One step runs amplifier-triage with --attractor-source, --provider, --event-path."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "amplifier-triage" in cmds
+        assert "--attractor-source" in cmds
+        assert "--provider" in cmds
+        assert "--event-path" in cmds
+
+    def test_provision_sets_github_api_url(self, profile: dict) -> None:
+        """Run step must set GITHUB_API_URL pointing to Gitea."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "GITHUB_API_URL" in cmds
+
+    def test_provision_verifies_comment_count(self, profile: dict) -> None:
+        """Verification step checks COMMENT_COUNT >= 1."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "COMMENT_COUNT" in cmds
+        assert "validation.done" in cmds
+
+    def test_readiness_check_for_attractor(self, profile: dict) -> None:
+        """Readiness check must verify /root/validation.done exists."""
+        readiness = profile["readiness"]
+        assert len(readiness) >= 1
+        commands = [r.get("command", "") for r in readiness]
+        assert any("validation.done" in cmd for cmd in commands), (
+            "No readiness check tests for /root/validation.done"
+        )
