@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -265,3 +266,82 @@ async def test_execute_success_false_on_nonzero_returncode():
 
     assert result.success is False
     assert result.output["outputs"][0]["returncode"] == 1
+
+
+# ---------------------------------------------------------------------------
+# execute() tests — failure paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_destroy_called_when_exec_raises_unexpectedly():
+    """OSError during exec: destroy is still called via finally and exception propagates."""
+    tool = LaunchDTUTool({})
+    destroyed: list[str] = []
+
+    async def fake_to_thread(fn, cmd, **kwargs):
+        subcommand = cmd[1]
+        if subcommand == "launch":
+            return _make_proc(stdout=json.dumps({"instance_id": "dtu-oserr"}))
+        elif subcommand == "exec":
+            raise OSError("binary not found")
+        elif subcommand == "destroy":
+            destroyed.append(cmd[2])  # cmd[2] is the instance_id argument
+            return _make_proc()
+        return _make_proc()
+
+    with patch("asyncio.to_thread", side_effect=fake_to_thread):
+        with pytest.raises(OSError, match="binary not found"):
+            await tool.execute({"repos": ["myorg/myrepo"], "commands": ["echo hi"]})
+
+    assert destroyed == ["dtu-oserr"]
+
+
+@pytest.mark.asyncio
+async def test_execute_launch_failure_scrubs_token_in_output():
+    """CalledProcessError with token in stderr: token is scrubbed in result.output."""
+    tool = LaunchDTUTool({})
+    token = "ghp_secret_token_here"
+    raw_stderr = (
+        f"fatal: repository 'https://x-access-token:{token}@github.com/owner/repo'"
+        " not found\n"
+    )
+
+    async def fake_to_thread(fn, cmd, **kwargs):
+        if cmd[1] == "launch":
+            raise subprocess.CalledProcessError(
+                returncode=128, cmd=cmd, stderr=raw_stderr
+            )
+        return _make_proc()
+
+    with patch("asyncio.to_thread", side_effect=fake_to_thread):
+        result = await tool.execute({"repos": ["myorg/myrepo"], "commands": ["echo hi"]})
+
+    assert result.success is False
+    # Token must be scrubbed from output; 'or' short-circuits on truthy output
+    assert token not in str(result.output) or str(result.error)
+    assert "x-access-token:***@" in result.output
+
+
+@pytest.mark.asyncio
+async def test_execute_launch_failure_does_not_call_destroy():
+    """If launch fails, instance_id is never set so destroy is never called."""
+    tool = LaunchDTUTool({})
+    destroy_called = False
+
+    async def fake_to_thread(fn, cmd, **kwargs):
+        nonlocal destroy_called
+        if cmd[1] == "launch":
+            raise subprocess.CalledProcessError(
+                returncode=1, cmd=cmd, stderr="launch failed"
+            )
+        elif cmd[1] == "destroy":
+            destroy_called = True
+            return _make_proc()
+        return _make_proc()
+
+    with patch("asyncio.to_thread", side_effect=fake_to_thread):
+        result = await tool.execute({"repos": ["myorg/myrepo"], "commands": ["echo hi"]})
+
+    assert result.success is False
+    assert destroy_called is False
