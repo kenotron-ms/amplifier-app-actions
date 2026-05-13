@@ -1,0 +1,59 @@
+# Reference workflow for AI-assisted pull request review.
+#
+# Copy this file to .github/workflows/pr-review.yml in your repository.
+#
+# WARNING: NEVER use pull_request_target for this workflow.
+# pull_request_target runs with write permissions in the context of the *base*
+# branch and can expose secrets to untrusted code from a fork — a well-known
+# security anti-pattern.  Use pull_request only.  See:
+# https://securitylab.github.com/research/github-actions-preventing-pwn-requests/
+#
+# Prerequisites:
+#   1. Set the ANTHROPIC_API_KEY repository secret.
+
+name: PR Review
+
+on:
+  pull_request:
+    types: [opened]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: microsoft/amplifier-app-actions@v1
+        with:
+          prompt: |
+            You are a senior code reviewer. A pull request has just been opened in
+            this repository. The repository has already been checked out in the
+            current working directory.
+
+            Your job is to review the changes introduced by this pull request and
+            post a structured review comment using github_post_comment.
+
+            Structure your review comment as follows:
+
+            ## Summary
+            One or two sentences describing what the PR does.
+
+            ## Bugs / Concerns
+            List any bugs, potential runtime errors, security issues, or logic
+            problems you find.  For each item include the file path and line
+            number in the format `file.py:42`.  If none, write "None found."
+
+            ## Improvements
+            Suggestions that would make the code cleaner, more maintainable, or
+            more idiomatic — but are not blocking issues.  Keep this concise.
+
+            Be constructive, specific, and kind.  Assume good intent.
+          provider: anthropic
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

@@ -1,0 +1,55 @@
+name: 'amplifier-app-actions'
+description: 'Run Amplifier-powered AI agents in GitHub Actions workflows'
+author: 'Microsoft MADE:Explorations Team'
+
+inputs:
+  prompt:
+    description: 'Inline prompt to pass to the Amplifier session'
+    required: false
+    default: ''
+  prompt_source:
+    description: 'Path or URL to a prompt file (overrides prompt if set)'
+    required: false
+    default: ''
+  recipe_source:
+    description: 'Path or URL to an Amplifier recipe YAML file'
+    required: false
+    default: ''
+  attractor_source:
+    description: 'Path or URL to an attractor/context file'
+    required: false
+    default: ''
+  provider:
+    description: 'AI provider to use (e.g. anthropic, openai, azure)'
+    required: false
+    default: 'anthropic'
+  model:
+    description: 'Model name override (leave empty to use provider default)'
+    required: false
+    default: ''
+  github_token:
+    description: 'GitHub token for API calls (defaults to GITHUB_TOKEN)'
+    required: false
+    default: '${{ github.token }}'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup uv
+      uses: astral-sh/setup-uv@v4
+
+    - name: Sync Python environment
+      shell: bash
+      run: uv sync --project ${{ github.action_path }}
+
+    - name: Run Amplifier action
+      shell: bash
+      env:
+        INPUT_PROMPT: ${{ inputs.prompt }}
+        INPUT_PROMPT_SOURCE: ${{ inputs.prompt_source }}
+        INPUT_RECIPE_SOURCE: ${{ inputs.recipe_source }}
+        INPUT_ATTRACTOR_SOURCE: ${{ inputs.attractor_source }}
+        INPUT_PROVIDER: ${{ inputs.provider }}
+        INPUT_MODEL: ${{ inputs.model }}
+        INPUT_GITHUB_TOKEN: ${{ inputs.github_token }}
+      run: uv run --project ${{ github.action_path }} python ${{ github.action_path }}/main.py

@@ -1,0 +1,47 @@
+# Reference Tier 1 (automatic) workflow for issue triage.
+#
+# Copy this file to .github/workflows/issue-triage.yml in your repository.
+#
+# What it does: when a new issue is opened, an Amplifier-powered AI agent
+# classifies the issue and adds an appropriate label, then posts an
+# acknowledgment comment so the reporter knows their issue was received.
+#
+# Prerequisites:
+#   1. Set the ANTHROPIC_API_KEY repository secret.
+#   2. Ensure the required labels exist in your repository:
+#      bug, feature-request, question, documentation
+
+name: Issue Triage
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: microsoft/amplifier-app-actions@v1
+        with:
+          prompt: |
+            You are an issue triage assistant. A new issue has been opened in this
+            GitHub repository. Your job is to:
+
+            1. Read the issue title and body from the GitHub event context.
+            2. Classify the issue into exactly one of these categories:
+               - bug            (something is broken or not working as expected)
+               - feature-request (a request for new functionality)
+               - question       (the author is asking how to do something)
+               - documentation  (missing, incorrect, or unclear docs)
+            3. Call github_add_label with the chosen label name.
+            4. Call github_post_comment with a brief, friendly acknowledgment.
+               - Thank the author for opening the issue.
+               - Mention the label you applied and why.
+               - Keep the tone warm and professional; do not promise timelines.
+          provider: anthropic
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
