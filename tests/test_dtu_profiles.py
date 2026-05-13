@@ -725,3 +725,183 @@ class TestValidateAttractorProfile:
         assert any("validation.done" in cmd for cmd in commands), (
             "No readiness check tests for /root/validation.done"
         )
+
+
+# ---------------------------------------------------------------------------
+# Workspace-level profile: triage-sandbox.yaml
+# ---------------------------------------------------------------------------
+
+
+class TestTriageSandboxProfile:
+    """Validates the workspace-level triage-sandbox.yaml DTU profile."""
+
+    @pytest.fixture
+    def profile_path(self) -> Path:
+        return _WORKSPACE_PROFILES_DIR / "triage-sandbox.yaml"
+
+    @pytest.fixture
+    def profile(self, profile_path: Path) -> dict:
+        """Parse and return the profile YAML."""
+        return yaml.safe_load(profile_path.read_text())
+
+    def test_file_exists(self, profile_path: Path) -> None:
+        assert profile_path.exists(), f"triage-sandbox.yaml not found at {profile_path}"
+
+    def test_valid_yaml(self, profile_path: Path) -> None:
+        """Profile must be parseable YAML (no syntax errors)."""
+        content = yaml.safe_load(profile_path.read_text())
+        assert content is not None
+        assert isinstance(content, dict)
+
+    def test_name(self, profile: dict) -> None:
+        assert profile["name"] == "triage-sandbox"
+
+    def test_base_image(self, profile: dict) -> None:
+        assert profile["base"]["image"] == "ubuntu:24.04"
+
+    def test_description_mentions_persistent_gitea(self, profile: dict) -> None:
+        """Description must mention persistent Gitea sandbox."""
+        desc = profile.get("description", "")
+        assert "Gitea" in desc or "gitea" in desc, "Description must mention Gitea"
+        assert "persist" in desc.lower() or "sandbox" in desc.lower(), (
+            "Description must mention 'persist' or 'sandbox'"
+        )
+
+    def test_networking_expose_port_3000(self, profile: dict) -> None:
+        """networking.expose_ports must forward host:3000 → container:3000."""
+        expose_ports = profile["networking"]["expose_ports"]
+        assert any(
+            p.get("host_port") == 3000 and p.get("container_port") == 3000
+            for p in expose_ports
+        ), "Expected host_port=3000, container_port=3000 in networking.expose_ports"
+
+    def test_lifecycle_persist_true(self, profile: dict) -> None:
+        """lifecycle.persist must be true (non-ephemeral sandbox)."""
+        assert profile["lifecycle"]["persist"] is True, "lifecycle.persist must be true"
+
+    def test_vars_repos_required(self, profile: dict) -> None:
+        """repos var must be declared and required."""
+        var_names = {v["name"] for v in profile["vars"]}
+        assert "repos" in var_names, "'repos' var not declared"
+        repos_var = next(v for v in profile["vars"] if v["name"] == "repos")
+        assert repos_var.get("required") is True, "'repos' var must be required"
+
+    def test_vars_seed_from_default_manual(self, profile: dict) -> None:
+        """seed_from var must default to 'manual'."""
+        var_names = {v["name"] for v in profile["vars"]}
+        assert "seed_from" in var_names, "'seed_from' var not declared"
+        seed_var = next(v for v in profile["vars"] if v["name"] == "seed_from")
+        assert seed_var.get("default") == "manual", "seed_from must default to 'manual'"
+
+    def test_vars_gh_token_default_empty(self, profile: dict) -> None:
+        """GH_TOKEN var must default to empty string."""
+        var_names = {v["name"] for v in profile["vars"]}
+        assert "GH_TOKEN" in var_names, "'GH_TOKEN' var not declared"
+        gh_token_var = next(v for v in profile["vars"] if v["name"] == "GH_TOKEN")
+        assert gh_token_var.get("default") == "", (
+            "GH_TOKEN must default to empty string"
+        )
+
+    def test_vars_gitea_port_default_3000(self, profile: dict) -> None:
+        """GITEA_PORT var must default to '3000'."""
+        var_names = {v["name"] for v in profile["vars"]}
+        assert "GITEA_PORT" in var_names, "'GITEA_PORT' var not declared"
+        port_var = next(v for v in profile["vars"] if v["name"] == "GITEA_PORT")
+        assert str(port_var.get("default")) == "3000", (
+            "GITEA_PORT must default to '3000'"
+        )
+
+    def test_passthrough_allow_external(self, profile: dict) -> None:
+        assert profile["passthrough"]["allow_external"] is True
+
+    def test_passthrough_env_includes_gh_token(self, profile: dict) -> None:
+        """passthrough.env must include GH_TOKEN for GitHub seeding."""
+        env_list = profile["passthrough"].get("env", [])
+        assert "GH_TOKEN" in env_list, "passthrough.env must include GH_TOKEN"
+
+    def test_provision_has_setup_cmds(self, profile: dict) -> None:
+        assert "setup_cmds" in profile["provision"]
+        assert len(profile["provision"]["setup_cmds"]) >= 4, (
+            "Expected at least 4 setup_cmds steps"
+        )
+
+    def test_provision_installs_system_deps(self, profile: dict) -> None:
+        """First setup cmd installs git, curl, jq, python3."""
+        first_cmd = profile["provision"]["setup_cmds"][0]
+        assert "apt-get" in first_cmd
+        assert "jq" in first_cmd
+        assert "git" in first_cmd
+
+    def test_provision_installs_gitea(self, profile: dict) -> None:
+        """One step downloads gitea binary and configures it."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "gitea" in cmds.lower()
+        assert "1.21.11" in cmds or "gitea" in cmds
+
+    def test_provision_starts_gitea_web(self, profile: dict) -> None:
+        """One step starts the Gitea web server."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "gitea web" in cmds or "nohup gitea" in cmds
+
+    def test_provision_creates_admin_user(self, profile: dict) -> None:
+        """One step creates the Gitea admin user."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "admin" in cmds
+        assert "admin123" in cmds
+
+    def test_provision_generates_api_token(self, profile: dict) -> None:
+        """One step generates and saves the Gitea API token."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "GITEA_TOKEN" in cmds
+        assert "gitea_env" in cmds or "GITEA_TOKEN=" in cmds
+
+    def test_provision_provisions_repos_from_var(self, profile: dict) -> None:
+        """One step parses the repos var and provisions each org/repo."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "${repos}" in cmds or "repos" in cmds
+        # Must use IFS or loop to parse comma-separated list
+        assert "IFS" in cmds or "for " in cmds
+
+    def test_provision_creates_org_idempotent(self, profile: dict) -> None:
+        """Org creation must be idempotent (ignore 422)."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "orgs" in cmds
+        assert "|| true" in cmds or "422" in cmds
+
+    def test_provision_handles_github_seeding(self, profile: dict) -> None:
+        """Repo provisioning checks seed_from=github and mirrors repos."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "github" in cmds.lower()
+        assert "seed_from" in cmds or "mirror" in cmds
+
+    def test_provision_prints_export_commands(self, profile: dict) -> None:
+        """Final step prints export commands for GITHUB_API_URL, GITHUB_CLONE_URL, GITHUB_TOKEN."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "GITHUB_API_URL" in cmds
+        assert "GITHUB_CLONE_URL" in cmds
+        assert "GITHUB_TOKEN" in cmds
+
+    def test_provision_prints_amplifier_triage_example(self, profile: dict) -> None:
+        """Final step prints an example amplifier-triage command."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "amplifier-triage" in cmds
+
+    def test_provision_touches_sandbox_ready(self, profile: dict) -> None:
+        """Final step touches /root/sandbox.ready."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "sandbox.ready" in cmds
+
+    def test_readiness_check_sandbox_ready(self, profile: dict) -> None:
+        """Readiness check must verify /root/sandbox.ready exists."""
+        readiness = profile["readiness"]
+        assert len(readiness) >= 1
+        commands = [r.get("command", "") for r in readiness]
+        assert any("sandbox.ready" in cmd for cmd in commands), (
+            "No readiness check tests for /root/sandbox.ready"
+        )
+
+    def test_no_assertions_section(self, profile: dict) -> None:
+        """Triage sandbox must NOT have an assertions section."""
+        assert "assertions" not in profile, (
+            "triage-sandbox must not have assertions — human reviews Gitea"
+        )
