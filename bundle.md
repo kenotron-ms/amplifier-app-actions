@@ -4,6 +4,10 @@ version: 0.1.0
 includes:
   - git+https://github.com/microsoft/amplifier-foundation@main
   - git+https://github.com/microsoft/amplifier-bundle-recipes@main
+
+providers:
+  - module: provider-anthropic
+    source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
 ---
 
 # amplifier-app-actions Bundle
