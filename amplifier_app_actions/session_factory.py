@@ -83,21 +83,19 @@ async def create_session(
     # Apply provider/model overrides before prepare() compiles the mount plan.
     if provider:
         module_name = f"provider-{provider}"
-        # Preserve source hint from the bundle's pre-configured provider entry (if any),
-        # so the module activator can locate the provider even when we replace the list.
-        source = next(
-            (
-                p.get("source")
-                for p in (bundle.providers or [])
-                if p.get("module") == module_name
-            ),
+        # Start from the full pre-configured bundle entry so source and any
+        # default config (e.g. raw: true) survive when we replace the list.
+        matching = next(
+            (p for p in (bundle.providers or []) if p.get("module") == module_name),
             None,
         )
-        entry: dict[str, Any] = {"module": module_name}
-        if source:
-            entry["source"] = source
+        entry: dict[str, Any] = dict(matching) if matching else {"module": module_name}
         if model:
-            entry["config"] = {"model": model}
+            # Merge into config rather than replacing it wholesale so provider-specific
+            # flags (e.g. raw: true) are not discarded.
+            cfg = dict(entry.get("config") or {})
+            cfg["model"] = model
+            entry["config"] = cfg
         bundle.providers = [entry]
 
     prepared = await bundle.prepare()

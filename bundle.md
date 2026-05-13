@@ -9,6 +9,10 @@ includes:
 providers:
   - module: provider-anthropic
     source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
+  - module: provider-openai
+    source: git+https://github.com/microsoft/amplifier-module-provider-openai@main
+  - module: provider-github-copilot
+    source: git+https://github.com/microsoft/amplifier-module-provider-github-copilot@main
 ---
 
 # amplifier-app-actions Bundle
