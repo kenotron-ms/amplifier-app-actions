@@ -2,7 +2,7 @@
 name: amplifier-app-actions
 version: 0.1.0
 includes:
-  - foundation
+  - git+https://github.com/microsoft/amplifier-foundation@main
   - git+https://github.com/microsoft/amplifier-bundle-recipes@main
 ---
 
