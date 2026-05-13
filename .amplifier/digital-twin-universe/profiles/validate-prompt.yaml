@@ -1,0 +1,182 @@
+# validate-prompt.yaml
+#
+# Validates amplifier-app-actions in prompt mode against local Gitea.
+#
+# What this tests:
+#   - parse_event correctly reads the issue event JSON
+#   - resolve_instruction picks up the inline prompt
+#   - session_factory creates a session with GitHub tools mounted
+#   - The agent calls github_post_comment to post triage findings
+#   - The agent calls github_add_label to classify the issue
+#
+# Prerequisites:
+#   1. Run host setup (see plan preamble) to start Gitea and mirror the action repo.
+#   2. ANTHROPIC_API_KEY must be set on the host.
+#
+# Launch:
+#   amplifier-digital-twin launch validate-prompt.yaml \
+#     --var GITEA_URL=$GITEA_URL \
+#     --var GITEA_TOKEN=$GITEA_TOKEN
+
+name: validate-prompt
+description: >
+  End-to-end validation of amplifier-app-actions in prompt mode.
+  Runs main.py with INPUT_PROMPT against a Gitea issue.
+  Verifies that at least one comment is posted to the issue.
+
+base:
+  image: ubuntu:24.04
+
+vars:
+  - name: GITEA_URL
+    required: true
+    description: "Host Gitea base URL, e.g. http://10.86.0.1:10210"
+  - name: GITEA_TOKEN
+    required: true
+    description: "Gitea admin API token"
+  - name: core_ref
+    default: ""
+    description: "amplifier-core ref override (empty = use published PyPI)"
+  - name: foundation_ref
+    default: ""
+    description: "amplifier-foundation ref override (empty = use GitHub main)"
+
+passthrough:
+  allow_external: true
+  services:
+    - name: anthropic
+      key_env: ANTHROPIC_API_KEY
+
+url_rewrites:
+  auth:
+    username: admin
+    token_var: GITEA_TOKEN
+  # Keep uv's GitHub fast path disabled so `uv tool install` routes through
+  # git fetch and these rules actually apply. See docs/profiles.md for the
+  # reasoning.
+  allow_uv_github_fast_path: false
+  default_match_mode: boundary
+  rules:
+    # Redirect action repo installs to local Gitea mirror
+    - match: github.com/microsoft/amplifier-app-actions
+      target: ${GITEA_URL}/admin/amplifier-app-actions
+
+provision:
+  setup_cmds:
+    # --- System dependencies ---
+    - apt-get update -qq && apt-get install -y -q git curl jq python3
+
+    # --- uv ---
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    # --- Create test org, repo, and issue in Gitea ---
+    - |
+      # Create test-org (ignore 422 if already exists)
+      curl -sf -X POST ${GITEA_URL}/api/v1/orgs \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer ${GITEA_TOKEN}" \
+        -d '{"username":"test-org","visibility":"private"}' > /dev/null || true
+
+      # Create test-repo
+      curl -sf -X POST ${GITEA_URL}/api/v1/orgs/test-org/repos \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer ${GITEA_TOKEN}" \
+        -d '{"name":"test-repo","private":true,"auto_init":true}' > /dev/null || true
+
+      # Wait for repo to initialize
+      sleep 3
+
+      # Create issue #1 (our test target)
+      curl -sf -X POST ${GITEA_URL}/api/v1/repos/test-org/test-repo/issues \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer ${GITEA_TOKEN}" \
+        -d '{"title":"Auth module crashes on startup","body":"Getting a NullPointerException at line 47 of auth.py when the service starts. Reproducible 100% of the time."}' \
+        > /tmp/issue_result.json
+
+      ISSUE_NUMBER=$(jq -r '.number' /tmp/issue_result.json)
+      echo "Created issue #${ISSUE_NUMBER} in test-org/test-repo"
+
+      # Create labels the agent can apply
+      for label in bug feature-request question documentation needs-investigation; do
+        curl -sf -X POST ${GITEA_URL}/api/v1/repos/test-org/test-repo/labels \
+          -H 'Content-Type: application/json' \
+          -H "Authorization: Bearer ${GITEA_TOKEN}" \
+          -d "{\"name\":\"${label}\",\"color\":\"#0075ca\"}" > /dev/null || true
+      done
+
+      echo "Labels created"
+
+    # --- Install amplifier-app-actions from local Gitea mirror ---
+    - |
+      export PATH="/root/.local/bin:$PATH"
+
+      # url_rewrites redirects this clone to ${GITEA_URL}/admin/amplifier-app-actions
+      uv tool install -vv \
+        "git+https://github.com/microsoft/amplifier-app-actions"
+
+      amplifier-triage --help
+      echo "amplifier-triage installed successfully"
+
+    # --- Write the synthetic GitHub issue event JSON ---
+    - |
+      cat > /root/event.json << 'EVEOF'
+      {
+        "action": "opened",
+        "issue": {
+          "number": 1,
+          "title": "Auth module crashes on startup",
+          "body": "Getting a NullPointerException at line 47 of auth.py when the service starts. Reproducible 100% of the time.",
+          "user": {"login": "test-user"},
+          "labels": []
+        },
+        "repository": {
+          "name": "test-repo",
+          "owner": {"login": "test-org"}
+        }
+      }
+      EVEOF
+      echo "Event JSON written to /root/event.json"
+
+    # --- Run the action in prompt mode ---
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      set -e
+
+      GITHUB_API_URL="${GITEA_URL}/api/v1" \
+      GITHUB_CLONE_URL="${GITEA_URL}" \
+      GITHUB_TOKEN="${GITEA_TOKEN}" \
+      amplifier-triage \
+        --prompt "You are triaging a new issue in a private repository. Read the issue title and body. Classify the issue type (bug, feature-request, question, or documentation) and add the appropriate label using github_add_label. Then post a brief triage comment using github_post_comment that confirms receipt and states the classification." \
+        --provider anthropic \
+        --github-token "${GITEA_TOKEN}" \
+        --event-path /root/event.json
+
+      echo "Action completed"
+
+    # --- VERIFY: assert at least one comment was posted ---
+    - |
+      COMMENT_COUNT=$(curl -sf \
+        -H "Authorization: Bearer ${GITEA_TOKEN}" \
+        "${GITEA_URL}/api/v1/repos/test-org/test-repo/issues/1/comments" \
+        | jq 'length')
+
+      echo "Comments on issue #1: ${COMMENT_COUNT}"
+
+      if [ "${COMMENT_COUNT}" -lt 1 ]; then
+        echo "VALIDATION FAILED: Expected >= 1 comment, got ${COMMENT_COUNT}"
+        exit 1
+      fi
+
+      echo "VALIDATION PASSED: Comment posted to issue #1"
+
+      # Print the first comment for human review
+      curl -sf \
+        -H "Authorization: Bearer ${GITEA_TOKEN}" \
+        "${GITEA_URL}/api/v1/repos/test-org/test-repo/issues/1/comments" \
+        | jq -r '.[0].body' | head -20
+
+      touch /root/validation.done
+
+readiness:
+  - name: validate-prompt-passed
+    command: "test -f /root/validation.done"
