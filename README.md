@@ -28,7 +28,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: kenotron-ms/amplifier-app-actions@v1
         with:
-          mode: prompt
           prompt: |
             You are triaging a new GitHub issue.
 
@@ -62,7 +61,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: kenotron-ms/amplifier-app-actions@v1
         with:
-          mode: prompt
           prompt: |
             You are reviewing a new pull request.
 
@@ -83,13 +81,16 @@ The action reads the GitHub event (issue or PR), runs an Amplifier agent session
 ## Configuration
 
 | Input | Description | Default |
-|-------|-------------|---------| 
-| `mode` | Execution mode: `prompt` or `recipe` | `prompt` |
-| `prompt` | Prompt text for the agent (prompt mode) | — |
-| `recipe_path` | Path to a recipe YAML file, relative to workspace root (recipe mode) | — |
+|-------|-------------|---------|
+| `prompt` | Inline prompt text | — |
+| `prompt_source` | Path or URL to a prompt file | — |
+| `recipe_source` | Path or URL to an Amplifier recipe YAML | — |
+| `attractor_source` | Path or URL to an attractor `.dot` file | — |
 | `provider` | LLM provider: `anthropic`, `openai`, `azure`, `ollama` | `anthropic` |
-| `model` | Model name — falls back to provider default if omitted | — |
-| `github_token` | GitHub token for posting results | `${{ github.token }}` |
+| `model` | Model name override — falls back to provider default if omitted | — |
+| `github_token` | GitHub token for API calls | `${{ github.token }}` |
+
+Exactly one of `prompt`, `prompt_source`, `recipe_source`, or `attractor_source` must be set.
 
 Provider API keys are passed as environment variables, not action inputs. Set the appropriate secret for your provider:
 
@@ -100,9 +101,30 @@ Provider API keys are passed as environment variables, not action inputs. Set th
 | Azure OpenAI | `AZURE_OPENAI_API_KEY` |
 | Ollama | (no key needed) |
 
-## Recipe mode (advanced)
+## Recipes and attractors (advanced)
 
-If `mode: recipe`, the action runs a multi-step Amplifier recipe instead of a single prompt. The `recipe_path` input points to a YAML recipe file checked into your repo. Requires `actions/checkout` to be present. Staged (approval-gated) recipes are not supported in CI and will fail with a clear error.
+For runs more involved than a single prompt, point the action at a recipe or attractor file. Each accepts a local workspace path or an HTTPS URL.
+
+- **`recipe_source`** — a multi-step Amplifier recipe YAML. The action loads the recipe and runs it against the event context. Requires `actions/checkout` to be present when the source is a local path. Staged (approval-gated) recipes are not supported in CI and will fail with a clear error.
+- **`attractor_source`** — a Graphviz `.dot` attractor file describing the shape of the desired outcome. The action loads it as additional context for the agent, useful for steering recipes or prompts toward a known-good structure.
+
+## Local testing
+
+You can run this action against a local Gitea sandbox or a Digital Twin Universe (DTU) instance instead of github.com. Override the API and clone endpoints via environment variables:
+
+```yaml
+env:
+  GITHUB_API_URL: http://localhost:3000/api/v1   # point at Gitea
+  GITHUB_CLONE_URL: http://localhost:3000         # redirect clones
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+This is useful for iterating on prompts, recipes, or the action itself without round-tripping through github.com — for example, when running inside a DTU profile or against an ephemeral Gitea container.
+
+| Env var | Purpose |
+|---------|---------|
+| `GITHUB_API_URL` | Redirect GitHub REST API calls (e.g. to a local Gitea instance) |
+| `GITHUB_CLONE_URL` | Redirect `git clone` calls (e.g. to a local Gitea instance) |
 
 ## Requirements
 
@@ -112,4 +134,4 @@ If `mode: recipe`, the action runs a multi-step Amplifier recipe instead of a si
 
 ## Security
 
-This action is designed for private repositories. The agent's capability surface is intentionally bounded: it reads files, posts comments, and adds labels — nothing else. The workflow must not use `pull_request_target`; use `pull_request` only. See the [design document](docs/plans/2026-05-12-amplifier-app-actions-design.md) for the full security rationale.
+This action is designed for private repositories. The agent's capability surface is intentionally bounded: it reads files, posts comments, and adds labels — nothing else. The workflow must not use `pull_request_target`; use `pull_request` only.
