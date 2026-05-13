@@ -11,6 +11,15 @@ import yaml
 _REPO_ROOT = Path(__file__).parent.parent
 _PROFILES_DIR = _REPO_ROOT / ".amplifier" / "digital-twin-universe" / "profiles"
 
+# Workspace root (parent of the amplifier-app-actions submodule)
+_WORKSPACE_ROOT = _REPO_ROOT.parent
+_WORKSPACE_PROFILES_DIR = (
+    _WORKSPACE_ROOT / ".amplifier" / "digital-twin-universe" / "profiles"
+)
+_WORKSPACE_FIXTURES_DIR = (
+    _WORKSPACE_ROOT / ".amplifier" / "digital-twin-universe" / "fixtures"
+)
+
 
 class TestValidatePromptProfile:
     """Validates the validate-prompt.yaml DTU profile structure and content."""
@@ -101,7 +110,9 @@ class TestValidatePromptProfile:
     def test_url_rewrite_app_actions_target(self, profile: dict) -> None:
         rules = profile["url_rewrites"]["rules"]
         rule = next(
-            r for r in rules if r["match"] == "github.com/microsoft/amplifier-app-actions"
+            r
+            for r in rules
+            if r["match"] == "github.com/microsoft/amplifier-app-actions"
         )
         assert "${GITEA_URL}/admin/amplifier-app-actions" in rule["target"]
 
@@ -155,6 +166,284 @@ class TestValidatePromptProfile:
         cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
         assert "COMMENT_COUNT" in cmds
         assert "validation.done" in cmds
+
+    def test_readiness_check(self, profile: dict) -> None:
+        """Readiness check must verify /root/validation.done exists."""
+        readiness = profile["readiness"]
+        assert len(readiness) >= 1
+        commands = [r.get("command", "") for r in readiness]
+        assert any("validation.done" in cmd for cmd in commands), (
+            "No readiness check tests for /root/validation.done"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Workspace-level fixture: triage-recipe.yaml
+# ---------------------------------------------------------------------------
+
+
+class TestTriageRecipeFixture:
+    """Validates the workspace-level triage-recipe.yaml fixture structure and content."""
+
+    @pytest.fixture
+    def fixture_path(self) -> Path:
+        return _WORKSPACE_FIXTURES_DIR / "triage-recipe.yaml"
+
+    @pytest.fixture
+    def recipe(self, fixture_path: Path) -> dict:
+        """Parse and return the fixture YAML."""
+        return yaml.safe_load(fixture_path.read_text())
+
+    def test_file_exists(self, fixture_path: Path) -> None:
+        assert fixture_path.exists(), f"triage-recipe.yaml not found at {fixture_path}"
+
+    def test_valid_yaml(self, fixture_path: Path) -> None:
+        """Fixture must be parseable YAML (no syntax errors)."""
+        content = yaml.safe_load(fixture_path.read_text())
+        assert content is not None
+        assert isinstance(content, dict)
+
+    def test_name(self, recipe: dict) -> None:
+        assert recipe["name"] == "dtu-test-triage"
+
+    def test_description_present(self, recipe: dict) -> None:
+        assert "description" in recipe
+        assert recipe["description"]
+
+    def test_has_exactly_two_steps(self, recipe: dict) -> None:
+        assert len(recipe["steps"]) == 2
+
+    def test_classify_step_exists(self, recipe: dict) -> None:
+        step_ids = [s["id"] for s in recipe["steps"]]
+        assert "classify" in step_ids
+
+    def test_report_step_exists(self, recipe: dict) -> None:
+        step_ids = [s["id"] for s in recipe["steps"]]
+        assert "report" in step_ids
+
+    def test_classify_step_has_output_classification(self, recipe: dict) -> None:
+        classify = next(s for s in recipe["steps"] if s["id"] == "classify")
+        assert classify.get("output") == "classification"
+
+    def test_classify_step_parse_json(self, recipe: dict) -> None:
+        classify = next(s for s in recipe["steps"] if s["id"] == "classify")
+        assert classify.get("parse_json") is True
+
+    def test_report_step_depends_on_classify(self, recipe: dict) -> None:
+        report = next(s for s in recipe["steps"] if s["id"] == "report")
+        assert "classify" in report.get("depends_on", [])
+
+    def test_classify_step_is_bash(self, recipe: dict) -> None:
+        classify = next(s for s in recipe["steps"] if s["id"] == "classify")
+        assert classify.get("type") == "bash"
+
+    def test_report_step_is_bash(self, recipe: dict) -> None:
+        report = next(s for s in recipe["steps"] if s["id"] == "report")
+        assert report.get("type") == "bash"
+
+    def test_classify_command_contains_bug_pattern(self, recipe: dict) -> None:
+        """Classify step must detect bugs via keywords."""
+        classify = next(s for s in recipe["steps"] if s["id"] == "classify")
+        cmd = classify.get("command", "")
+        assert "bug" in cmd.lower()
+
+    def test_classify_command_adds_label(self, recipe: dict) -> None:
+        """Classify step must call the GitHub API to add a label."""
+        classify = next(s for s in recipe["steps"] if s["id"] == "classify")
+        cmd = classify.get("command", "")
+        assert "labels" in cmd
+
+    def test_report_command_posts_comment(self, recipe: dict) -> None:
+        """Report step must post a comment via GitHub API."""
+        report = next(s for s in recipe["steps"] if s["id"] == "report")
+        cmd = report.get("command", "")
+        assert "comments" in cmd
+
+    def test_classify_env_uses_title(self, recipe: dict) -> None:
+        """Classify step env must pass issue title from template context."""
+        classify = next(s for s in recipe["steps"] if s["id"] == "classify")
+        env = classify.get("env", {})
+        assert any("title" in v for v in env.values())
+
+    def test_classify_env_uses_body(self, recipe: dict) -> None:
+        """Classify step env must pass issue body from template context."""
+        classify = next(s for s in recipe["steps"] if s["id"] == "classify")
+        env = classify.get("env", {})
+        assert any("body" in v for v in env.values())
+
+    def test_report_env_uses_classification(self, recipe: dict) -> None:
+        """Report step env must use the classification output from previous step."""
+        report = next(s for s in recipe["steps"] if s["id"] == "report")
+        env = report.get("env", {})
+        assert any("classification" in v for v in env.values())
+
+
+# ---------------------------------------------------------------------------
+# Workspace-level profile: validate-recipe.yaml
+# ---------------------------------------------------------------------------
+
+
+class TestValidateRecipeProfile:
+    """Validates the workspace-level validate-recipe.yaml DTU profile structure and content."""
+
+    @pytest.fixture
+    def profile_path(self) -> Path:
+        return _WORKSPACE_PROFILES_DIR / "validate-recipe.yaml"
+
+    @pytest.fixture
+    def profile(self, profile_path: Path) -> dict:
+        """Parse and return the profile YAML."""
+        return yaml.safe_load(profile_path.read_text())
+
+    def test_file_exists(self, profile_path: Path) -> None:
+        assert profile_path.exists(), (
+            f"validate-recipe.yaml not found at {profile_path}"
+        )
+
+    def test_valid_yaml(self, profile_path: Path) -> None:
+        """Profile must be parseable YAML (no syntax errors)."""
+        content = yaml.safe_load(profile_path.read_text())
+        assert content is not None
+        assert isinstance(content, dict)
+
+    def test_name(self, profile: dict) -> None:
+        assert profile["name"] == "validate-recipe"
+
+    def test_base_image(self, profile: dict) -> None:
+        assert profile["base"]["image"] == "ubuntu:24.04"
+
+    def test_vars_declared(self, profile: dict) -> None:
+        """GITEA_URL and GITEA_TOKEN must be required vars; core_ref and foundation_ref optional."""
+        vars_list = profile["vars"]
+        var_names = {v["name"] for v in vars_list}
+        assert "GITEA_URL" in var_names, "GITEA_URL var not declared"
+        assert "GITEA_TOKEN" in var_names, "GITEA_TOKEN var not declared"
+        assert "core_ref" in var_names, "core_ref var not declared"
+        assert "foundation_ref" in var_names, "foundation_ref var not declared"
+
+    def test_gitea_url_required(self, profile: dict) -> None:
+        gitea_url_var = next(v for v in profile["vars"] if v["name"] == "GITEA_URL")
+        assert gitea_url_var.get("required") is True
+
+    def test_gitea_token_required(self, profile: dict) -> None:
+        gitea_token_var = next(v for v in profile["vars"] if v["name"] == "GITEA_TOKEN")
+        assert gitea_token_var.get("required") is True
+
+    def test_core_ref_default_empty(self, profile: dict) -> None:
+        core_ref_var = next(v for v in profile["vars"] if v["name"] == "core_ref")
+        assert core_ref_var.get("default") == ""
+
+    def test_foundation_ref_default_empty(self, profile: dict) -> None:
+        foundation_ref_var = next(
+            v for v in profile["vars"] if v["name"] == "foundation_ref"
+        )
+        assert foundation_ref_var.get("default") == ""
+
+    def test_passthrough_allow_external(self, profile: dict) -> None:
+        assert profile["passthrough"]["allow_external"] is True
+
+    def test_passthrough_anthropic_service(self, profile: dict) -> None:
+        services = profile["passthrough"]["services"]
+        service_names = [s["name"] for s in services]
+        assert "anthropic" in service_names
+
+    def test_anthropic_key_env(self, profile: dict) -> None:
+        anthropic = next(
+            s for s in profile["passthrough"]["services"] if s["name"] == "anthropic"
+        )
+        assert anthropic["key_env"] == "ANTHROPIC_API_KEY"
+
+    def test_url_rewrites_auth(self, profile: dict) -> None:
+        auth = profile["url_rewrites"]["auth"]
+        assert auth["username"] == "admin"
+        assert auth["token_var"] == "GITEA_TOKEN"
+
+    def test_url_rewrites_no_fast_path(self, profile: dict) -> None:
+        assert profile["url_rewrites"]["allow_uv_github_fast_path"] is False
+
+    def test_url_rewrites_boundary_mode(self, profile: dict) -> None:
+        assert profile["url_rewrites"]["default_match_mode"] == "boundary"
+
+    def test_url_rewrite_app_actions_rule(self, profile: dict) -> None:
+        rules = profile["url_rewrites"]["rules"]
+        matches = [r["match"] for r in rules]
+        assert "github.com/microsoft/amplifier-app-actions" in matches
+
+    def test_url_rewrite_app_actions_target(self, profile: dict) -> None:
+        rules = profile["url_rewrites"]["rules"]
+        rule = next(
+            r
+            for r in rules
+            if r["match"] == "github.com/microsoft/amplifier-app-actions"
+        )
+        assert "${GITEA_URL}/admin/amplifier-app-actions" in rule["target"]
+
+    def test_provision_has_setup_cmds(self, profile: dict) -> None:
+        assert "setup_cmds" in profile["provision"]
+        assert len(profile["provision"]["setup_cmds"]) >= 5, (
+            "Expected at least 5 setup_cmds steps"
+        )
+
+    def test_provision_installs_deps(self, profile: dict) -> None:
+        """First setup cmd must install system dependencies including jq."""
+        first_cmd = profile["provision"]["setup_cmds"][0]
+        assert "apt-get" in first_cmd
+        assert "jq" in first_cmd
+
+    def test_provision_installs_uv(self, profile: dict) -> None:
+        """One setup cmd installs uv via the official installer script."""
+        cmds = profile["provision"]["setup_cmds"]
+        assert any("astral.sh/uv" in cmd for cmd in cmds), (
+            "No step installs uv via astral.sh"
+        )
+
+    def test_provision_creates_recipe_test_repo(self, profile: dict) -> None:
+        """One step creates test-org and recipe-test-repo (not test-repo) in Gitea."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "test-org" in cmds
+        assert "recipe-test-repo" in cmds
+
+    def test_provision_creates_issue_with_error_title(self, profile: dict) -> None:
+        """Issue #1 must have 'Login page' or '500' in its title."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "Login" in cmds or "500" in cmds
+
+    def test_provision_installs_amplifier_triage(self, profile: dict) -> None:
+        """One step installs amplifier-app-actions via uv tool install."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "uv tool install" in cmds
+        assert "amplifier-app-actions" in cmds
+
+    def test_provision_writes_recipe_file(self, profile: dict) -> None:
+        """One step writes the triage recipe YAML to /root/triage-recipe.yaml."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "triage-recipe.yaml" in cmds
+        assert "RECIPEEOF" in cmds
+
+    def test_provision_writes_event_json(self, profile: dict) -> None:
+        """One step writes event.json with action='opened' for recipe-test-repo."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "event.json" in cmds
+        assert "recipe-test-repo" in cmds
+
+    def test_provision_runs_amplifier_triage_recipe_mode(self, profile: dict) -> None:
+        """One step runs amplifier-triage with --recipe-source, --provider, --event-path."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "amplifier-triage" in cmds
+        assert "--recipe-source" in cmds
+        assert "--provider" in cmds
+        assert "--event-path" in cmds
+
+    def test_provision_verifies_comment_count(self, profile: dict) -> None:
+        """Verification step checks COMMENT_COUNT >= 1."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "COMMENT_COUNT" in cmds
+        assert "validation.done" in cmds
+
+    def test_provision_verifies_classification_language(self, profile: dict) -> None:
+        """Verification step checks comment body for classification terms."""
+        cmds = " ".join(str(c) for c in profile["provision"]["setup_cmds"])
+        assert "bug" in cmds.lower()
 
     def test_readiness_check(self, profile: dict) -> None:
         """Readiness check must verify /root/validation.done exists."""
