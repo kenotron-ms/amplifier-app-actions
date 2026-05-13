@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import asyncio  # noqa: F401
-import json  # noqa: F401
-import os  # noqa: F401
+import asyncio
+import json
+import os
 import re
-import subprocess  # noqa: F401
-from pathlib import Path  # noqa: F401
+import subprocess
+from pathlib import Path
 from typing import Any
-from uuid import uuid4  # noqa: F401
+from uuid import uuid4
 
 from amplifier_core import ModuleCoordinator, ToolResult  # type: ignore[import]
 
@@ -190,7 +190,7 @@ class LaunchDTUTool:
                 return ToolResult(
                     success=False,
                     output=safe_stderr,
-                    error={"returncode": exc.returncode, "stderr": exc.stderr},
+                    error={"returncode": exc.returncode, "stderr": safe_stderr},
                 )
 
             instance_id = json.loads(launch_result.stdout)["instance_id"]

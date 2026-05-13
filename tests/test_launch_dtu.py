@@ -320,8 +320,9 @@ async def test_execute_launch_failure_scrubs_token_in_output():
         )
 
     assert result.success is False
-    # Token must be scrubbed from output; 'or' short-circuits on truthy output
-    assert token not in str(result.output) or str(result.error)
+    # Token must be scrubbed from both output and error
+    assert token not in str(result.output), "Token found in output (not scrubbed)"
+    assert token not in str(result.error), "Token found in error dict (not scrubbed)"
     assert "x-access-token:***@" in result.output
 
 
