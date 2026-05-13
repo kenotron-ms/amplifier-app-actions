@@ -45,7 +45,7 @@ async def test_create_session_calls_load_bundle_with_bundle_path():
     with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
         await create_session(bundle_path, github_token="test-token")
 
-    mock_load.assert_called_once_with(bundle_path)
+    mock_load.assert_called_once_with(str(bundle_path))
 
 
 async def test_create_session_chains_prepare_and_create_session():

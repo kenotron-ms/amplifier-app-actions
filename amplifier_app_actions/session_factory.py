@@ -77,7 +77,7 @@ async def create_session(
     if session_cwd is None:
         session_cwd = Path.cwd()
 
-    bundle = await load_bundle(bundle_path)
+    bundle = await load_bundle(str(bundle_path))
 
     # Apply provider/model overrides before prepare() compiles the mount plan.
     if provider:
