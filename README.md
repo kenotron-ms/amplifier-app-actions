@@ -135,3 +135,85 @@ This is useful for iterating on prompts, recipes, or the action itself without r
 ## Security
 
 This action is designed for private repositories. The agent's capability surface is intentionally bounded: it reads files, posts comments, and adds labels — nothing else. The workflow must not use `pull_request_target`; use `pull_request` only.
+
+## Issue reproduction (advanced)
+
+When an agent identifies a failure that is worth reproducing, it can call the `launch_dtu` tool to spin up an ephemeral, isolated Ubuntu container, clone one or more repositories at specific versions, run commands inside it, capture the output, and destroy the container — leaving no trace on the host.
+
+This is useful for verifying that a bug exists at a reported version and is fixed in a newer one without touching the host system.
+
+### Guiding the agent to reproduce failures
+
+Add instructions to your prompt so the agent knows to reach for `launch_dtu` when it finds a failure:
+
+```
+If you identify a failure that is worth reproducing, use the launch_dtu tool.
+Specify the affected repository and the version from the issue description, e.g.
+repos: ["myorg/mylib@v1.4.2"]. Run the minimal commands needed to reproduce the
+failure and include the exact output in your comment.
+```
+
+### repo@ref format
+
+Each repository is passed as `owner/repo` or `owner/repo@ref`:
+
+| Format | Example | Behaviour |
+|--------|---------|-----------|
+| Tag | `myorg/mylib@v1.4.2` | Clones the tag via `--branch` |
+| Branch | `myorg/mylib@main` | Clones the branch via `--branch` |
+| SHA | `myorg/mylib@abc1234` | Full clone then `git checkout <sha>` |
+| HEAD | `myorg/mylib` | Clones the default branch (shallow) |
+
+### Private repositories
+
+`GITHUB_TOKEN` is automatically injected into the container from the host environment. No extra configuration is needed — private repos are cloned via `x-access-token:<token>@github.com`.
+
+### Runner requirements
+
+> **Note:** `enable_reproduction: true` requires a full VM runner — `runs-on: ubuntu-latest` — **not** a container-based runner. Self-hosted runners with Incus pre-installed are also supported.
+
+When `enable_reproduction: true` is set, the action automatically bootstraps Incus in three steps before running the agent:
+
+1. Install the Incus package.
+2. Initialise Incus with a minimal `preseed` configuration.
+3. Verify the daemon is healthy.
+
+No manual setup is required when using the `ubuntu-latest` hosted runner.
+
+### Complete workflow example
+
+```yaml
+# .github/workflows/issue-triage-with-reproduction.yml
+name: Issue Triage with Reproduction
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: kenotron-ms/amplifier-app-actions@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          enable_reproduction: true
+          prompt: |
+            You are triaging a new GitHub issue.
+
+            Review the issue title and body. Then:
+            1. Classify the issue type and add the appropriate label: bug, feature-request, question, or documentation
+            2. Post a comment that acknowledges the issue, confirms its type, and briefly describes what happens next
+
+            If the issue describes a crash or unexpected behaviour and includes version information,
+            use the launch_dtu tool to reproduce the failure. Include the exact output in your comment.
+
+            Be concise. Do not speculate about causes or promise timelines.
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
