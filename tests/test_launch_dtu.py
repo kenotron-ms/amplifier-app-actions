@@ -56,3 +56,28 @@ def test_parse_repo_sha_ref():
     assert owner == "myorg"
     assert repo == "myrepo"
     assert ref == "abc1234"
+
+
+# ---------------------------------------------------------------------------
+# _is_sha tests
+# ---------------------------------------------------------------------------
+
+
+def test_is_sha_seven_char_hex():
+    """Seven lowercase hex chars ('abc1234') → True."""
+    assert _is_sha("abc1234") is True
+
+
+def test_is_sha_forty_char_hex():
+    """Forty lowercase hex chars → True (full SHA-1 length)."""
+    assert _is_sha("a" * 40) is True
+
+
+def test_is_sha_tag_is_not_sha():
+    """Version tag ('v1.2.3') contains dots/uppercase → False."""
+    assert _is_sha("v1.2.3") is False
+
+
+def test_is_sha_branch_main_is_not_sha():
+    """Branch name 'main' contains non-hex chars → False."""
+    assert _is_sha("main") is False
