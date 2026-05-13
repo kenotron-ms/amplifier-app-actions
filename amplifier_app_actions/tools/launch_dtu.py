@@ -244,7 +244,7 @@ class LaunchDTUTool:
 async def mount(
     coordinator: ModuleCoordinator,
     config: dict[str, Any] | None = None,
-) -> dict[str, Any]:  # pragma: no cover
+) -> dict[str, Any]:
     """Instantiate and register LaunchDTUTool with the coordinator."""
     tool = LaunchDTUTool(config or {})
     await coordinator.mount("tools", tool, name=tool.name)

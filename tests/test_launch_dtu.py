@@ -315,7 +315,9 @@ async def test_execute_launch_failure_scrubs_token_in_output():
         return _make_proc()
 
     with patch("asyncio.to_thread", side_effect=fake_to_thread):
-        result = await tool.execute({"repos": ["myorg/myrepo"], "commands": ["echo hi"]})
+        result = await tool.execute(
+            {"repos": ["myorg/myrepo"], "commands": ["echo hi"]}
+        )
 
     assert result.success is False
     # Token must be scrubbed from output; 'or' short-circuits on truthy output
@@ -341,7 +343,64 @@ async def test_execute_launch_failure_does_not_call_destroy():
         return _make_proc()
 
     with patch("asyncio.to_thread", side_effect=fake_to_thread):
-        result = await tool.execute({"repos": ["myorg/myrepo"], "commands": ["echo hi"]})
+        result = await tool.execute(
+            {"repos": ["myorg/myrepo"], "commands": ["echo hi"]}
+        )
 
     assert result.success is False
     assert destroy_called is False
+
+
+# ---------------------------------------------------------------------------
+# mount() tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mount_registers_tool_with_correct_name():
+    """mount() calls coordinator.mount with args[0]=='tools' and kwargs['name']=='launch_dtu'."""
+    coordinator = MagicMock()
+    coordinator.mount = MagicMock(return_value=None)
+
+    async def async_mount(*args, **kwargs):
+        return None
+
+    coordinator.mount = MagicMock(side_effect=async_mount)
+
+    await mount(coordinator)
+
+    coordinator.mount.assert_called_once()
+    call_args = coordinator.mount.call_args
+    assert call_args.args[0] == "tools"
+    assert call_args.kwargs["name"] == "launch_dtu"
+
+
+@pytest.mark.asyncio
+async def test_mount_returns_dict_with_tool_name():
+    """mount() returns {'tool': 'launch_dtu'}."""
+    coordinator = MagicMock()
+
+    async def async_mount(*args, **kwargs):
+        return None
+
+    coordinator.mount = MagicMock(side_effect=async_mount)
+
+    result = await mount(coordinator)
+
+    assert result == {"tool": "launch_dtu"}
+
+
+@pytest.mark.asyncio
+async def test_mount_with_none_config_uses_empty_dict():
+    """mount(coordinator, None) does not raise and still registers the tool."""
+    coordinator = MagicMock()
+
+    async def async_mount(*args, **kwargs):
+        return None
+
+    coordinator.mount = MagicMock(side_effect=async_mount)
+
+    result = await mount(coordinator, None)
+
+    assert result == {"tool": "launch_dtu"}
+    coordinator.mount.assert_called_once()
