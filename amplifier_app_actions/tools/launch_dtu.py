@@ -61,16 +61,102 @@ def _is_sha(ref: str) -> bool:
 class LaunchDTUTool:
     """Provision and interact with a Digital Twin Universe instance."""
 
-    def __init__(self, config: dict[str, Any]) -> None:  # pragma: no cover
+    def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
+        self.github_token: str = config.get("github_token") or os.environ.get(
+            "GITHUB_TOKEN", ""
+        )
 
     @property
-    def name(self) -> str:  # pragma: no cover
+    def name(self) -> str:
         return "launch_dtu"
 
     @property
-    def description(self) -> str:  # pragma: no cover
-        return "Launch a Digital Twin Universe instance for integration testing."
+    def description(self) -> str:
+        return (
+            "Launch a Digital Twin Universe instance for integration testing. "
+            "Clones one or more GitHub repositories into /workspace/<repo> and "
+            "runs the provided commands inside an isolated Ubuntu 24.04 container. "
+            "Each repo is specified as 'owner/repo' (default branch) or "
+            "'owner/repo@ref' where ref is a branch, tag, or SHA."
+        )
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "repos": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "List of repositories to clone, each as 'owner/repo' or "
+                        "'owner/repo@ref' (branch, tag, or SHA)."
+                    ),
+                },
+                "commands": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Shell commands to run inside the container.",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Optional description for the DTU session.",
+                },
+            },
+            "required": ["repos", "commands"],
+        }
+
+    def _generate_profile(self, repos: list[str], commands: list[str]) -> str:
+        """Generate a minimal DTU profile YAML using string formatting.
+
+        Parameters
+        ----------
+        repos:
+            List of repo specs in 'owner/repo' or 'owner/repo@ref' format.
+        commands:
+            Shell commands to run inside the container.
+
+        Returns
+        -------
+        str
+            A YAML string suitable for use as a DTU profile.
+        """
+        setup_cmds: list[str] = [
+            "apt-get update -qq && apt-get install -y -q git"
+        ]
+
+        for spec in repos:
+            owner, repo, ref = _parse_repo(spec)
+            url = (
+                f"https://x-access-token:${{GITHUB_TOKEN}}@github.com/{owner}/{repo}"
+            )
+            dest = f"/workspace/{repo}"
+
+            if ref is None:
+                clone_cmd = f"git clone --depth 1 {url} {dest}"
+            elif _is_sha(ref):
+                clone_cmd = f"git clone {url} {dest} && git -C {dest} checkout {ref}"
+            else:
+                clone_cmd = f"git clone --depth 1 --branch {ref} {url} {dest}"
+
+            setup_cmds.append(clone_cmd)
+
+        setup_cmds_yaml = "\n".join(f"  - {cmd}" for cmd in setup_cmds)
+        commands_yaml = "\n".join(f"  - {cmd}" for cmd in commands)
+
+        return (
+            "base_image: ubuntu:24.04\n"
+            "allow_external: true\n"
+            "env:\n"
+            "  passthrough:\n"
+            "    - GITHUB_TOKEN\n"
+            "    - ANTHROPIC_API_KEY\n"
+            "setup_cmds:\n"
+            f"{setup_cmds_yaml}\n"
+            "commands:\n"
+            f"{commands_yaml}\n"
+        )
 
     async def execute(
         self, input_data: dict[str, Any]

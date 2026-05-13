@@ -81,3 +81,46 @@ def test_is_sha_tag_is_not_sha():
 def test_is_sha_branch_main_is_not_sha():
     """Branch name 'main' contains non-hex chars → False."""
     assert _is_sha("main") is False
+
+
+# ---------------------------------------------------------------------------
+# _generate_profile tests
+# ---------------------------------------------------------------------------
+
+
+def test_branch_or_tag_uses_depth_and_branch_flag():
+    """Branch/tag ref: git clone --depth 1 --branch <ref> <url> <dest>."""
+    tool = LaunchDTUTool({})
+    profile = tool._generate_profile(
+        repos=["microsoft/amplifier-core@v1.2.3"],
+        commands=["echo hello"],
+    )
+    assert "--depth 1" in profile
+    assert "--branch v1.2.3" in profile
+    assert "ubuntu:24.04" in profile
+    assert "GITHUB_TOKEN" in profile
+    assert "ANTHROPIC_API_KEY" in profile
+    assert "/workspace/amplifier-core" in profile
+
+
+def test_sha_uses_full_clone_then_checkout():
+    """SHA ref: git clone <url> <dest> && git -C <dest> checkout <sha> (no --depth, no --branch)."""
+    sha = "abc1234"
+    tool = LaunchDTUTool({})
+    profile = tool._generate_profile(
+        repos=[f"microsoft/amplifier-core@{sha}"],
+        commands=["echo hello"],
+    )
+    assert f"checkout {sha}" in profile
+    assert "--branch" not in profile
+
+
+def test_no_ref_uses_depth_only():
+    """No ref: git clone --depth 1 <url> <dest> (no --branch)."""
+    tool = LaunchDTUTool({})
+    profile = tool._generate_profile(
+        repos=["microsoft/amplifier-core"],
+        commands=["echo hello"],
+    )
+    assert "--depth 1" in profile
+    assert "--branch" not in profile
