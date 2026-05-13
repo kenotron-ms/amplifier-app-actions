@@ -9,16 +9,9 @@ import yaml
 
 # Root of the amplifier-app-actions repo (parent of this tests/ directory)
 _REPO_ROOT = Path(__file__).parent.parent
-_PROFILES_DIR = _REPO_ROOT / ".amplifier" / "digital-twin-universe" / "profiles"
-
-# Workspace root (parent of the amplifier-app-actions submodule)
-_WORKSPACE_ROOT = _REPO_ROOT.parent
-_WORKSPACE_PROFILES_DIR = (
-    _WORKSPACE_ROOT / ".amplifier" / "digital-twin-universe" / "profiles"
-)
-_WORKSPACE_FIXTURES_DIR = (
-    _WORKSPACE_ROOT / ".amplifier" / "digital-twin-universe" / "fixtures"
-)
+_DTU_ROOT = _REPO_ROOT / ".amplifier" / "digital-twin-universe"
+_PROFILES_DIR = _DTU_ROOT / "profiles"
+_FIXTURES_DIR = _DTU_ROOT / "fixtures"
 
 
 class TestValidatePromptProfile:
@@ -187,7 +180,7 @@ class TestTriageRecipeFixture:
 
     @pytest.fixture
     def fixture_path(self) -> Path:
-        return _WORKSPACE_FIXTURES_DIR / "triage-recipe.yaml"
+        return _FIXTURES_DIR / "triage-recipe.yaml"
 
     @pytest.fixture
     def recipe(self, fixture_path: Path) -> dict:
@@ -288,7 +281,7 @@ class TestValidateRecipeProfile:
 
     @pytest.fixture
     def profile_path(self) -> Path:
-        return _WORKSPACE_PROFILES_DIR / "validate-recipe.yaml"
+        return _PROFILES_DIR / "validate-recipe.yaml"
 
     @pytest.fixture
     def profile(self, profile_path: Path) -> dict:
@@ -465,7 +458,7 @@ class TestTriageDotFixture:
 
     @pytest.fixture
     def fixture_path(self) -> Path:
-        return _WORKSPACE_FIXTURES_DIR / "triage.dot"
+        return _FIXTURES_DIR / "triage.dot"
 
     @pytest.fixture
     def dot_content(self, fixture_path: Path) -> str:
@@ -546,7 +539,7 @@ class TestValidateAttractorProfile:
 
     @pytest.fixture
     def profile_path(self) -> Path:
-        return _WORKSPACE_PROFILES_DIR / "validate-attractor.yaml"
+        return _PROFILES_DIR / "validate-attractor.yaml"
 
     @pytest.fixture
     def profile(self, profile_path: Path) -> dict:
@@ -737,7 +730,7 @@ class TestTriageSandboxProfile:
 
     @pytest.fixture
     def profile_path(self) -> Path:
-        return _WORKSPACE_PROFILES_DIR / "triage-sandbox.yaml"
+        return _PROFILES_DIR / "triage-sandbox.yaml"
 
     @pytest.fixture
     def profile(self, profile_path: Path) -> dict:
@@ -918,9 +911,7 @@ class TestGenericDepOverrideValidateRecipe:
 
     @pytest.fixture
     def profile(self) -> dict:
-        return yaml.safe_load(
-            (_WORKSPACE_PROFILES_DIR / "validate-recipe.yaml").read_text()
-        )
+        return yaml.safe_load((_PROFILES_DIR / "validate-recipe.yaml").read_text())
 
     def test_pypi_overrides_present(self, profile: dict) -> None:
         """Profile must declare a pypi_overrides block."""
@@ -952,7 +943,9 @@ class TestGenericDepOverrideValidateRecipe:
         """amplifier-foundation rule must redirect to local Gitea mirror."""
         rules = profile["url_rewrites"]["rules"]
         rule = next(
-            r for r in rules if r["match"] == "github.com/microsoft/amplifier-foundation"
+            r
+            for r in rules
+            if r["match"] == "github.com/microsoft/amplifier-foundation"
         )
         assert "${GITEA_URL}/admin/amplifier-foundation" in rule["target"]
 
@@ -962,9 +955,7 @@ class TestGenericDepOverrideValidateAttractor:
 
     @pytest.fixture
     def profile(self) -> dict:
-        return yaml.safe_load(
-            (_WORKSPACE_PROFILES_DIR / "validate-attractor.yaml").read_text()
-        )
+        return yaml.safe_load((_PROFILES_DIR / "validate-attractor.yaml").read_text())
 
     def test_pypi_overrides_present(self, profile: dict) -> None:
         assert "pypi_overrides" in profile, "pypi_overrides block is missing"
@@ -989,7 +980,9 @@ class TestGenericDepOverrideValidateAttractor:
     def test_url_rewrite_foundation_target(self, profile: dict) -> None:
         rules = profile["url_rewrites"]["rules"]
         rule = next(
-            r for r in rules if r["match"] == "github.com/microsoft/amplifier-foundation"
+            r
+            for r in rules
+            if r["match"] == "github.com/microsoft/amplifier-foundation"
         )
         assert "${GITEA_URL}/admin/amplifier-foundation" in rule["target"]
 
@@ -1004,7 +997,7 @@ class TestValidateMultiRepoProfile:
 
     @pytest.fixture
     def profile_path(self) -> Path:
-        return _WORKSPACE_PROFILES_DIR / "validate-multi-repo.yaml"
+        return _PROFILES_DIR / "validate-multi-repo.yaml"
 
     @pytest.fixture
     def profile(self, profile_path: Path) -> dict:
@@ -1099,7 +1092,7 @@ class TestValidatePromptWorkspaceProfile:
 
     @pytest.fixture
     def profile_path(self) -> Path:
-        return _WORKSPACE_PROFILES_DIR / "validate-prompt.yaml"
+        return _PROFILES_DIR / "validate-prompt.yaml"
 
     @pytest.fixture
     def profile(self, profile_path: Path) -> dict:

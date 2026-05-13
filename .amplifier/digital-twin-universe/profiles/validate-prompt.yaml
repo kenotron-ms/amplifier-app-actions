@@ -60,6 +60,36 @@ url_rewrites:
     # Redirect action repo installs to local Gitea mirror
     - match: github.com/microsoft/amplifier-app-actions
       target: ${GITEA_URL}/admin/amplifier-app-actions
+    - match: github.com/microsoft/amplifier-foundation
+      target: ${GITEA_URL}/admin/amplifier-foundation
+
+# ---------------------------------------------------------------------------
+# Generic dependency override pattern
+#
+# core_ref and foundation_ref are Amplifier-specific examples. Any `*_ref`
+# var can point to a Gitea-mirrored dependency. When the ref is empty
+# (default), the published PyPI version is used instead.
+#
+# Usage: mirror local code first, then pass the ref at launch time:
+#   amplifier-gitea mirror-from-local ~/repos/amplifier-core \
+#     --to admin/amplifier-core
+#   amplifier-digital-twin launch validate-prompt.yaml \
+#     --var GITEA_URL=$GITEA_URL \
+#     --var GITEA_TOKEN=$GITEA_TOKEN \
+#     --var core_ref=main
+#
+# When core_ref is empty (default), the published PyPI version is used.
+# ---------------------------------------------------------------------------
+pypi_overrides:
+  packages:
+    - name: amplifier-core
+      wheel_from_git:
+        repo: ${GITEA_URL}/admin/amplifier-core.git
+        ref: ${core_ref}
+        username: admin
+        token_var: GITEA_TOKEN
+        build_cmd: uv build --wheel
+        wheel_glob: dist/amplifier_core-*.whl
 
 provision:
   setup_cmds:

@@ -1,0 +1,27 @@
+// triage.dot
+//
+// Minimal 2-node attractor fixture for DTU validation.
+// Used with amplifier-triage --attractor-source.
+//
+// Validates:
+//   - resolve_instruction picks up attractor_source file path
+//   - attractor tool is mounted and accessible
+//   - 2-node graph converges (classify → report)
+//   - report node calls github_post_comment
+
+digraph triage {
+  label="Issue Triage Attractor (DTU Test)"
+  rankdir=TB
+
+  classify [
+    label="Classify Issue"
+    description="Read the issue title and body. Determine the type (bug, feature-request, question, documentation) and severity. Add the appropriate label using github_add_label. Output: classification summary."
+  ]
+
+  report [
+    label="Post Report"
+    description="Using the classification from the previous step, post a structured triage comment using github_post_comment. Include: type, severity, one-sentence summary, and recommended next action."
+  ]
+
+  classify -> report
+}
