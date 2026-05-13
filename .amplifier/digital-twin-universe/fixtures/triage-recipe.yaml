@@ -1,0 +1,81 @@
+# dtu-test-triage — Minimal 2-step triage recipe for DTU validation
+#
+# Classifies a GitHub/Gitea issue and posts a concise triage comment.
+# Designed for use with amplifier-triage --recipe-source.
+#
+# Context variables supplied by amplifier-triage at runtime:
+#   number, owner, repo, title, body
+#
+# Required environment variables (set by the amplifier-triage caller):
+#   GITHUB_API_URL  — GitHub/Gitea REST API base URL (e.g. http://host/api/v1)
+#   GITHUB_TOKEN    — Personal access token for API authentication
+
+name: dtu-test-triage
+description: Minimal triage recipe for DTU validation
+version: "1.0.0"
+
+steps:
+  # Step 1: Classify the issue type and severity, then add the label.
+  - id: classify
+    type: bash
+    env:
+      ISSUE_TITLE: "{{ title }}"
+      ISSUE_BODY: "{{ body }}"
+      ISSUE_NUMBER: "{{ number }}"
+      ISSUE_OWNER: "{{ owner }}"
+      ISSUE_REPO: "{{ repo }}"
+    command: |
+      TYPE="question"
+      SEVERITY="n/a"
+      COMBINED="${ISSUE_TITLE} ${ISSUE_BODY}"
+
+      if echo "${COMBINED}" | grep -qiE 'error|crash|bug|fail|exception|throw|[0-9]{3} error'; then
+        TYPE="bug"
+        SEVERITY="high"
+      elif echo "${ISSUE_TITLE}" | grep -qiE 'feature|request|add|enhance|implement|support'; then
+        TYPE="feature-request"
+      elif echo "${ISSUE_TITLE}" | grep -qiE 'how|why|question|help|unclear'; then
+        TYPE="question"
+      elif echo "${ISSUE_TITLE}" | grep -qiE 'doc|readme|documentation|explain|guide'; then
+        TYPE="documentation"
+      fi
+
+      # Add the appropriate label via GitHub/Gitea API
+      curl -sf -X POST \
+        "${GITHUB_API_URL}/repos/${ISSUE_OWNER}/${ISSUE_REPO}/issues/${ISSUE_NUMBER}/labels" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+        -d "{\"labels\":[\"${TYPE}\"]}" > /dev/null 2>&1 || true
+
+      # Output classification as JSON for use in the report step
+      SUMMARY="${ISSUE_TITLE}"
+      printf '{"type":"%s","severity":"%s","summary":"%s"}\n' \
+        "${TYPE}" "${SEVERITY}" "${SUMMARY}"
+    output: classification
+    parse_json: true
+    timeout: 60
+
+  # Step 2: Post a triage comment using the classification from Step 1.
+  - id: report
+    type: bash
+    depends_on: [classify]
+    env:
+      ISSUE_NUMBER: "{{ number }}"
+      ISSUE_OWNER: "{{ owner }}"
+      ISSUE_REPO: "{{ repo }}"
+      ISSUE_TYPE: "{{ classification.type }}"
+      ISSUE_SEVERITY: "{{ classification.severity }}"
+      ISSUE_SUMMARY: "{{ classification.summary }}"
+    command: |
+      COMMENT_TEXT="Issue type: ${ISSUE_TYPE}. Severity: ${ISSUE_SEVERITY}. Summary: ${ISSUE_SUMMARY}. Recommended: Assign a maintainer to investigate this ${ISSUE_TYPE} issue."
+      BODY=$(jq -n --arg body "${COMMENT_TEXT}" '{"body": $body}')
+
+      curl -sf -X POST \
+        "${GITHUB_API_URL}/repos/${ISSUE_OWNER}/${ISSUE_REPO}/issues/${ISSUE_NUMBER}/comments" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+        -d "${BODY}"
+
+      echo "Triage comment posted for issue #${ISSUE_NUMBER}"
+    output: report
+    timeout: 60

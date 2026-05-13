@@ -1,0 +1,284 @@
+# validate-recipe.yaml
+#
+# Validates amplifier-app-actions in recipe mode against local Gitea.
+#
+# What this tests:
+#   - resolve_instruction picks up the recipe_source file path
+#   - recipes tool is mounted and accessible from cli.py
+#   - 2-step recipe executes in order (classify → report)
+#   - structured output flows between steps via context
+#   - report step calls github_post_comment with findings
+#
+# Prerequisites:
+#   1. Run host setup to start Gitea and mirror the action repo.
+#   2. ANTHROPIC_API_KEY must be set on the host.
+#
+# Launch:
+#   amplifier-digital-twin launch validate-recipe.yaml \
+#     --var GITEA_URL=$GITEA_URL \
+#     --var GITEA_TOKEN=$GITEA_TOKEN
+
+name: validate-recipe
+description: >
+  End-to-end validation of amplifier-app-actions in recipe mode.
+  Runs amplifier-triage with --recipe-source against a Gitea issue.
+  Verifies that at least one comment containing classification language
+  is posted to the issue.
+
+base:
+  image: ubuntu:24.04
+
+vars:
+  - name: GITEA_URL
+    required: true
+    description: "Host Gitea base URL, e.g. http://10.86.0.1:10210"
+  - name: GITEA_TOKEN
+    required: true
+    description: "Gitea admin API token"
+  - name: core_ref
+    default: ""
+    description: "amplifier-core ref override (empty = use published PyPI)"
+  - name: foundation_ref
+    default: ""
+    description: "amplifier-foundation ref override (empty = use GitHub main)"
+
+passthrough:
+  allow_external: true
+  services:
+    - name: anthropic
+      key_env: ANTHROPIC_API_KEY
+
+url_rewrites:
+  auth:
+    username: admin
+    token_var: GITEA_TOKEN
+  # Keep uv's GitHub fast path disabled so `uv tool install` routes through
+  # git fetch and these rules actually apply. See docs/profiles.md for the
+  # reasoning.
+  allow_uv_github_fast_path: false
+  default_match_mode: boundary
+  rules:
+    # Redirect action repo installs to local Gitea mirror
+    - match: github.com/microsoft/amplifier-app-actions
+      target: ${GITEA_URL}/admin/amplifier-app-actions
+    - match: github.com/microsoft/amplifier-foundation
+      target: ${GITEA_URL}/admin/amplifier-foundation
+
+# ---------------------------------------------------------------------------
+# Generic dependency override pattern
+#
+# core_ref and foundation_ref are Amplifier-specific examples. Any `*_ref`
+# var can point to a Gitea-mirrored dependency. When the ref is empty
+# (default), the published PyPI version is used instead.
+#
+# Usage: mirror local code first, then pass the ref at launch time:
+#   amplifier-gitea mirror-from-local ~/repos/amplifier-core \
+#     --to admin/amplifier-core
+#   amplifier-digital-twin launch validate-recipe.yaml \
+#     --var GITEA_URL=$GITEA_URL \
+#     --var GITEA_TOKEN=$GITEA_TOKEN \
+#     --var core_ref=main
+#
+# When core_ref is empty (default), the published PyPI version is used.
+# ---------------------------------------------------------------------------
+pypi_overrides:
+  packages:
+    - name: amplifier-core
+      wheel_from_git:
+        repo: ${GITEA_URL}/admin/amplifier-core.git
+        ref: ${core_ref}
+        username: admin
+        token_var: GITEA_TOKEN
+        build_cmd: uv build --wheel
+        wheel_glob: dist/amplifier_core-*.whl
+
+provision:
+  setup_cmds:
+    # --- System dependencies ---
+    - apt-get update -qq && apt-get install -y -q git curl jq python3
+
+    # --- uv ---
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    # --- Create test org, recipe-test-repo, issue #1, and labels in Gitea ---
+    - |
+      # Create test-org (ignore 422 if already exists)
+      curl -sf -X POST ${GITEA_URL}/api/v1/orgs \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer ${GITEA_TOKEN}" \
+        -d '{"username":"test-org","visibility":"private"}' > /dev/null || true
+
+      # Create recipe-test-repo
+      curl -sf -X POST ${GITEA_URL}/api/v1/orgs/test-org/repos \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer ${GITEA_TOKEN}" \
+        -d '{"name":"recipe-test-repo","private":true,"auto_init":true}' > /dev/null || true
+
+      # Wait for repo to initialize
+      sleep 3
+
+      # Create issue #1 (our test target)
+      curl -sf -X POST ${GITEA_URL}/api/v1/repos/test-org/recipe-test-repo/issues \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer ${GITEA_TOKEN}" \
+        -d '{"title":"Login page throws 500 error","body":"Steps to reproduce:\n1. Navigate to the login page\n2. Enter valid credentials\n3. Click submit\n4. Observe: 500 Internal Server Error is thrown\n\nExpected: Redirect to dashboard\nActual: 500 error page"}' \
+        > /tmp/issue_result.json
+
+      ISSUE_NUMBER=$(jq -r '.number' /tmp/issue_result.json)
+      echo "Created issue #${ISSUE_NUMBER} in test-org/recipe-test-repo"
+
+      # Create labels the recipe can apply
+      for label in bug feature-request question documentation needs-investigation; do
+        curl -sf -X POST ${GITEA_URL}/api/v1/repos/test-org/recipe-test-repo/labels \
+          -H 'Content-Type: application/json' \
+          -H "Authorization: Bearer ${GITEA_TOKEN}" \
+          -d "{\"name\":\"${label}\",\"color\":\"#0075ca\"}" > /dev/null || true
+      done
+
+      echo "Labels created"
+
+    # --- Install amplifier-app-actions from local Gitea mirror ---
+    - |
+      export PATH="/root/.local/bin:$PATH"
+
+      # url_rewrites redirects this clone to ${GITEA_URL}/admin/amplifier-app-actions
+      uv tool install -vv \
+        "git+https://github.com/microsoft/amplifier-app-actions"
+
+      amplifier-triage --help
+      echo "amplifier-triage installed successfully"
+
+    # --- Write the triage recipe YAML to /root/triage-recipe.yaml ---
+    - |
+      cat > /root/triage-recipe.yaml << 'RECIPEEOF'
+      name: dtu-test-triage
+      description: Minimal triage recipe for DTU validation
+      version: "1.0.0"
+
+      steps:
+        - id: classify
+          type: bash
+          env:
+            ISSUE_TITLE: "{{ title }}"
+            ISSUE_BODY: "{{ body }}"
+            ISSUE_NUMBER: "{{ number }}"
+            ISSUE_OWNER: "{{ owner }}"
+            ISSUE_REPO: "{{ repo }}"
+          command: |
+            TYPE="question"
+            SEVERITY="n/a"
+            COMBINED="${ISSUE_TITLE} ${ISSUE_BODY}"
+            if echo "${COMBINED}" | grep -qiE 'error|crash|bug|fail|exception|throw'; then
+              TYPE="bug"
+              SEVERITY="high"
+            elif echo "${ISSUE_TITLE}" | grep -qiE 'feature|request|add|enhance|implement'; then
+              TYPE="feature-request"
+            elif echo "${ISSUE_TITLE}" | grep -qiE 'how|why|question|help|unclear'; then
+              TYPE="question"
+            elif echo "${ISSUE_TITLE}" | grep -qiE 'doc|readme|documentation|explain|guide'; then
+              TYPE="documentation"
+            fi
+            curl -sf -X POST \
+              "${GITHUB_API_URL}/repos/${ISSUE_OWNER}/${ISSUE_REPO}/issues/${ISSUE_NUMBER}/labels" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -d "{\"labels\":[\"${TYPE}\"]}" > /dev/null 2>&1 || true
+            SUMMARY="${ISSUE_TITLE}"
+            printf '{"type":"%s","severity":"%s","summary":"%s"}\n' \
+              "${TYPE}" "${SEVERITY}" "${SUMMARY}"
+          output: classification
+          parse_json: true
+          timeout: 60
+
+        - id: report
+          type: bash
+          depends_on: [classify]
+          env:
+            ISSUE_NUMBER: "{{ number }}"
+            ISSUE_OWNER: "{{ owner }}"
+            ISSUE_REPO: "{{ repo }}"
+            ISSUE_TYPE: "{{ classification.type }}"
+            ISSUE_SEVERITY: "{{ classification.severity }}"
+            ISSUE_SUMMARY: "{{ classification.summary }}"
+          command: |
+            COMMENT_TEXT="Issue type: ${ISSUE_TYPE}. Severity: ${ISSUE_SEVERITY}. Summary: ${ISSUE_SUMMARY}. Recommended: Assign a maintainer to investigate this ${ISSUE_TYPE} issue."
+            BODY=$(jq -n --arg body "${COMMENT_TEXT}" '{"body": $body}')
+            curl -sf -X POST \
+              "${GITHUB_API_URL}/repos/${ISSUE_OWNER}/${ISSUE_REPO}/issues/${ISSUE_NUMBER}/comments" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -d "${BODY}"
+            echo "Triage comment posted for issue #${ISSUE_NUMBER}"
+          output: report
+          timeout: 60
+      RECIPEEOF
+      echo "Recipe written to /root/triage-recipe.yaml"
+
+    # --- Write the synthetic GitHub issue event JSON ---
+    - |
+      cat > /root/event.json << 'EVEOF'
+      {
+        "action": "opened",
+        "issue": {
+          "number": 1,
+          "title": "Login page throws 500 error",
+          "body": "Steps to reproduce:\n1. Navigate to the login page\n2. Enter valid credentials\n3. Click submit\n4. Observe: 500 Internal Server Error is thrown",
+          "user": {"login": "test-user"},
+          "labels": []
+        },
+        "repository": {
+          "name": "recipe-test-repo",
+          "owner": {"login": "test-org"}
+        }
+      }
+      EVEOF
+      echo "Event JSON written to /root/event.json"
+
+    # --- Run the action in recipe mode ---
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      set -e
+
+      GITHUB_API_URL="${GITEA_URL}/api/v1" \
+      GITHUB_CLONE_URL="${GITEA_URL}" \
+      GITHUB_TOKEN="${GITEA_TOKEN}" \
+      amplifier-triage \
+        --recipe-source /root/triage-recipe.yaml \
+        --provider anthropic \
+        --github-token "${GITEA_TOKEN}" \
+        --event-path /root/event.json
+
+      echo "Recipe action completed"
+
+    # --- VERIFY: assert at least one comment with classification language ---
+    - |
+      COMMENT_COUNT=$(curl -sf \
+        -H "Authorization: Bearer ${GITEA_TOKEN}" \
+        "${GITEA_URL}/api/v1/repos/test-org/recipe-test-repo/issues/1/comments" \
+        | jq 'length')
+
+      echo "Comments on issue #1: ${COMMENT_COUNT}"
+
+      if [ "${COMMENT_COUNT}" -lt 1 ]; then
+        echo "VALIDATION FAILED: Expected >= 1 comment, got ${COMMENT_COUNT}"
+        exit 1
+      fi
+
+      COMMENT_BODY=$(curl -sf \
+        -H "Authorization: Bearer ${GITEA_TOKEN}" \
+        "${GITEA_URL}/api/v1/repos/test-org/recipe-test-repo/issues/1/comments" \
+        | jq -r '.[0].body')
+
+      echo "First comment body: ${COMMENT_BODY}"
+
+      if echo "${COMMENT_BODY}" | grep -qiE 'bug|feature|question|documentation|severity|critical|high|medium|low'; then
+        echo "VALIDATION PASSED: Comment contains classification language"
+        touch /root/validation.done
+      else
+        echo "VALIDATION FAILED: Comment does not contain expected classification language"
+        exit 1
+      fi
+
+readiness:
+  - name: validate-recipe-passed
+    command: "test -f /root/validation.done"

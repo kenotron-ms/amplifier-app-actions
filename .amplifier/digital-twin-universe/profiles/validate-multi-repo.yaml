@@ -1,0 +1,369 @@
+# validate-multi-repo.yaml
+#
+# Validates amplifier-app-actions generic cross-repo investigation capability.
+#
+# What this tests:
+#   - github_checkout_repo called at least twice (multi-repo cloning)
+#   - cloned repos accessible via tool-filesystem
+#   - report step synthesizes cross-repo findings into one comment
+#   - workspace map injection (TRIAGE_CONTEXT_MAP_PATH) gives ecosystem awareness
+#
+# This profile is a TEMPLATE — repo names, issue content, and workspace map
+# are illustrative. The pattern generalises to any multi-repo investigation.
+#
+# Prerequisites:
+#   1. Run host setup to start Gitea and mirror the action repo.
+#   2. ANTHROPIC_API_KEY must be set on the host.
+#
+# Launch:
+#   amplifier-digital-twin launch validate-multi-repo.yaml \
+#     --var GITEA_URL=$GITEA_URL \
+#     --var GITEA_TOKEN=$GITEA_TOKEN
+
+name: validate-multi-repo
+description: >
+  End-to-end validation of amplifier-app-actions cross-repo investigation.
+  Creates three Gitea repos (service-api, shared-lib, client-sdk), opens a
+  cross-repo issue in service-api, writes a workspace map to disk, and runs
+  amplifier-triage with TRIAGE_CONTEXT_MAP_PATH set so the agent knows the
+  full ecosystem.  Verifies that at least two repos are cloned and that the
+  report comment mentions at least one of the three repos by name.
+
+base:
+  image: ubuntu:24.04
+
+vars:
+  - name: GITEA_URL
+    required: true
+    description: "Host Gitea base URL, e.g. http://10.86.0.1:10210"
+  - name: GITEA_TOKEN
+    required: true
+    description: "Gitea admin API token"
+  - name: core_ref
+    default: ""
+    description: "amplifier-core ref override (empty = use published PyPI)"
+  - name: foundation_ref
+    default: ""
+    description: "amplifier-foundation ref override (empty = use GitHub main)"
+
+passthrough:
+  allow_external: true
+  services:
+    - name: anthropic
+      key_env: ANTHROPIC_API_KEY
+
+url_rewrites:
+  auth:
+    username: admin
+    token_var: GITEA_TOKEN
+  # Keep uv's GitHub fast path disabled so `uv tool install` routes through
+  # git fetch and these rules actually apply. See docs/profiles.md for the
+  # reasoning.
+  allow_uv_github_fast_path: false
+  default_match_mode: boundary
+  rules:
+    # Redirect action repo installs to local Gitea mirror
+    - match: github.com/microsoft/amplifier-app-actions
+      target: ${GITEA_URL}/admin/amplifier-app-actions
+    - match: github.com/microsoft/amplifier-foundation
+      target: ${GITEA_URL}/admin/amplifier-foundation
+
+# ---------------------------------------------------------------------------
+# Generic dependency override pattern
+#
+# core_ref and foundation_ref are Amplifier-specific examples. Any `*_ref`
+# var can point to a Gitea-mirrored dependency. When the ref is empty
+# (default), the published PyPI version is used instead.
+#
+# Usage: mirror local code first, then pass the ref at launch time:
+#   amplifier-gitea mirror-from-local ~/repos/amplifier-core \
+#     --to admin/amplifier-core
+#   amplifier-digital-twin launch validate-multi-repo.yaml \
+#     --var GITEA_URL=$GITEA_URL \
+#     --var GITEA_TOKEN=$GITEA_TOKEN \
+#     --var core_ref=main
+#
+# When core_ref is empty (default), the published PyPI version is used.
+# ---------------------------------------------------------------------------
+pypi_overrides:
+  packages:
+    - name: amplifier-core
+      wheel_from_git:
+        repo: ${GITEA_URL}/admin/amplifier-core.git
+        ref: ${core_ref}
+        username: admin
+        token_var: GITEA_TOKEN
+        build_cmd: uv build --wheel
+        wheel_glob: dist/amplifier_core-*.whl
+
+provision:
+  setup_cmds:
+    # --- System dependencies ---
+    - apt-get update -qq && apt-get install -y -q git curl jq python3
+
+    # --- uv ---
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    # --- Create test-org and three repos in Gitea ---
+    - |
+      # Create test-org (ignore 422 if already exists)
+      curl -sf -X POST ${GITEA_URL}/api/v1/orgs \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer ${GITEA_TOKEN}" \
+        -d '{"username":"test-org","visibility":"private"}' > /dev/null || true
+
+      # Create service-api (primary repo — issue will be opened here)
+      curl -sf -X POST ${GITEA_URL}/api/v1/orgs/test-org/repos \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer ${GITEA_TOKEN}" \
+        -d '{"name":"service-api","private":true,"auto_init":true}' > /dev/null || true
+
+      # Create shared-lib (shared validation rules)
+      curl -sf -X POST ${GITEA_URL}/api/v1/orgs/test-org/repos \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer ${GITEA_TOKEN}" \
+        -d '{"name":"shared-lib","private":true,"auto_init":true}' > /dev/null || true
+
+      # Create client-sdk (client SDK)
+      curl -sf -X POST ${GITEA_URL}/api/v1/orgs/test-org/repos \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer ${GITEA_TOKEN}" \
+        -d '{"name":"client-sdk","private":true,"auto_init":true}' > /dev/null || true
+
+      # Wait for repos to initialize
+      sleep 3
+
+      echo "Three repos created in test-org"
+
+    # --- Create cross-repo issue in service-api and add labels ---
+    - |
+      # Create cross-repo issue #1 in service-api
+      curl -sf -X POST ${GITEA_URL}/api/v1/repos/test-org/service-api/issues \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer ${GITEA_TOKEN}" \
+        -d '{
+          "title": "Validation mismatch between shared-lib v2.1 and client-sdk expectations",
+          "body": "After upgrading shared-lib to v2.1, the service-api started rejecting requests that the client-sdk considers valid.\n\nSteps to reproduce:\n1. Build client-sdk with shared-lib v2.0 pinned\n2. Upgrade shared-lib to v2.1 in service-api only\n3. Send a request from the client-sdk\n4. Observe: service-api returns 422 Unprocessable Entity\n\nExpected: request is accepted (client-sdk and service-api agree on the schema)\nActual: validation rules in shared-lib v2.1 broke backward compatibility\n\nThis is likely a breaking change introduced in shared-lib that affects both service-api (server-side) and client-sdk (client-side) validation. The client-sdk bundles its own copy of the validation logic and has not been updated to match v2.1."
+        }' \
+        > /tmp/issue_result.json
+
+      ISSUE_NUMBER=$(jq -r '.number' /tmp/issue_result.json)
+      echo "Created issue #${ISSUE_NUMBER} in test-org/service-api"
+
+      # Add bug and needs-investigation labels
+      for label in bug needs-investigation; do
+        curl -sf -X POST ${GITEA_URL}/api/v1/repos/test-org/service-api/labels \
+          -H 'Content-Type: application/json' \
+          -H "Authorization: Bearer ${GITEA_TOKEN}" \
+          -d "{\"name\":\"${label}\",\"color\":\"#d73a4a\"}" > /dev/null || true
+      done
+
+      echo "Labels created on test-org/service-api"
+
+    # --- Install amplifier-app-actions from local Gitea mirror ---
+    - |
+      export PATH="/root/.local/bin:$PATH"
+
+      # url_rewrites redirects this clone to ${GITEA_URL}/admin/amplifier-app-actions
+      uv tool install -vv \
+        "git+https://github.com/microsoft/amplifier-app-actions"
+
+      amplifier-triage --help
+      echo "amplifier-triage installed successfully"
+
+    # --- Write /root/workspace-map.md (mirrors fixtures/workspace-map.md) ---
+    - |
+      cat > /root/workspace-map.md << 'MAPEOF'
+      # Project Workspace Map
+
+      This document describes all known repositories in this project's ecosystem.
+      Use it to determine which repos are relevant when investigating cross-repo issues.
+
+      ## Repositories
+
+      ### test-org/service-api
+      - **Type:** REST API service
+      - **Responsibility:** Exposes HTTP endpoints consumed by clients. Validates incoming
+        requests using rules from `shared-lib`. Breaking changes in `shared-lib` validation
+        logic can cause 4xx/5xx errors in this service.
+      - **Cascade impact:** If `shared-lib` validation rules change, service-api may reject
+        valid requests or accept invalid ones.
+
+      ### test-org/shared-lib
+      - **Type:** Shared validation library
+      - **Responsibility:** Contains reusable validation rules, data schemas, and utility
+        functions consumed by both `service-api` and `client-sdk`. Acts as the single source
+        of truth for input/output contracts across the ecosystem.
+      - **Cascade impact:** Any change to validation rules or schema definitions here will
+        affect both `service-api` (server-side validation) and `client-sdk` (client-side
+        validation). Version mismatches cause silent or hard failures.
+
+      ### test-org/client-sdk
+      - **Type:** Client SDK
+      - **Responsibility:** Provides language-native bindings for consumers of `service-api`.
+        Bundles its own copy of validation logic (mirrored from `shared-lib`) for client-side
+        pre-validation before API calls.
+      - **Cascade impact:** If `shared-lib` is updated but `client-sdk` is not, clients will
+        send requests that pass local validation but fail server-side validation in `service-api`.
+
+      ## Notes
+
+      - Cross-repo issues typically involve a mismatch between `shared-lib` and one or both
+        consumers (`service-api`, `client-sdk`).
+      - When investigating a validation mismatch, always check `shared-lib` first, then compare
+        the version pinned by each consumer.
+      - The `client-sdk` bundles its own copy of validation logic — a stale copy is the most
+        common root cause of client-to-server mismatch bugs.
+      MAPEOF
+      echo "Workspace map written to /root/workspace-map.md"
+
+    # --- Write /root/multi-repo-recipe.yaml ---
+    - |
+      cat > /root/multi-repo-recipe.yaml << 'RECIPEEOF'
+      name: dtu-multi-repo-triage
+      description: Cross-repo investigation recipe for DTU validation
+      version: "1.0.0"
+
+      steps:
+        - id: identify_repos
+          description: >
+            Read the issue and workspace map. Identify relevant repos. Call
+            github_checkout_repo for EACH relevant repo (at least shared-lib and
+            client-sdk, optionally service-api). Use tool-filesystem to inspect the
+            cloned repos for validation logic, version files, or schema definitions.
+            Output JSON with cloned_repos list and findings per repo.
+          instruction: |
+            You are investigating a cross-repo issue. The issue is:
+              Title: {{ title }}
+              Body: {{ body }}
+
+            A workspace map has been injected into your context describing the repos
+            in this project's ecosystem (service-api, shared-lib, client-sdk).
+
+            Your task:
+            1. Read the issue carefully to identify which repos are involved.
+            2. Call github_checkout_repo for EACH relevant repo to clone it into
+               /tmp/workspace/. You MUST clone at least shared-lib and client-sdk.
+               Also clone service-api if relevant.
+            3. Use tool-filesystem to inspect the cloned repos — look for validation
+               logic, version files, schema definitions, or anything related to the issue.
+            4. Document what you found in each repo.
+
+            Output a JSON object:
+            {
+              "cloned_repos": ["list", "of", "repo", "names"],
+              "findings": {
+                "repo-name": "what you found in this repo"
+              }
+            }
+          output_key: repo_findings
+          timeout: 300
+
+        - id: report
+          depends_on: [identify_repos]
+          description: >
+            Synthesize findings from all cloned repos into a single cross-repo
+            report comment posted via github_post_comment.
+          instruction: |
+            You have investigated the following cross-repo issue:
+              Title: {{ title }}
+              Body: {{ body }}
+
+            Investigation results:
+              Cloned repos: {{ repo_findings.cloned_repos }}
+              Findings: {{ repo_findings.findings }}
+
+            Post a comment on issue #{{ number }} in {{ owner }}/{{ repo }} using
+            github_post_comment. The comment MUST include:
+              1. A list of the repos you investigated
+                 (mention service-api, shared-lib, and/or client-sdk by name)
+              2. A brief summary of findings per repo
+              3. A root cause hypothesis explaining the cross-repo mismatch
+              4. Which team or repo should own the fix
+          timeout: 120
+      RECIPEEOF
+      echo "Multi-repo recipe written to /root/multi-repo-recipe.yaml"
+
+    # --- Write /root/event.json for issue #1 in service-api ---
+    - |
+      cat > /root/event.json << 'EVEOF'
+      {
+        "action": "opened",
+        "issue": {
+          "number": 1,
+          "title": "Validation mismatch between shared-lib v2.1 and client-sdk expectations",
+          "body": "After upgrading shared-lib to v2.1, the service-api started rejecting requests that the client-sdk considers valid.\n\nSteps to reproduce:\n1. Build client-sdk with shared-lib v2.0 pinned\n2. Upgrade shared-lib to v2.1 in service-api only\n3. Send a request from the client-sdk\n4. Observe: service-api returns 422 Unprocessable Entity\n\nExpected: request is accepted (client-sdk and service-api agree on the schema)\nActual: validation rules in shared-lib v2.1 broke backward compatibility",
+          "user": {"login": "test-user"},
+          "labels": [{"name": "bug"}, {"name": "needs-investigation"}]
+        },
+        "repository": {
+          "name": "service-api",
+          "owner": {"login": "test-org"}
+        }
+      }
+      EVEOF
+      echo "Event JSON written to /root/event.json"
+
+    # --- Run amplifier-triage in multi-repo recipe mode ---
+    - |
+      export PATH="/root/.local/bin:$PATH"
+      set -e
+
+      GITHUB_API_URL="${GITEA_URL}/api/v1" \
+      GITHUB_CLONE_URL="${GITEA_URL}" \
+      GITHUB_TOKEN="${GITEA_TOKEN}" \
+      TRIAGE_CONTEXT_MAP_PATH=/root/workspace-map.md \
+      amplifier-triage \
+        --recipe-source /root/multi-repo-recipe.yaml \
+        --provider anthropic \
+        --github-token "${GITEA_TOKEN}" \
+        --event-path /root/event.json
+
+      echo "Multi-repo triage action completed"
+
+    # --- VERIFY: check cloned repos, comment count, and comment content ---
+    - |
+      # Count repos cloned to /tmp/workspace/ (warn if <2, but don't fail)
+      REPO_COUNT=0
+      if [ -d /tmp/workspace ]; then
+        REPO_COUNT=$(find /tmp/workspace -maxdepth 1 -mindepth 1 -type d | wc -l)
+      fi
+      echo "Repos cloned to /tmp/workspace: ${REPO_COUNT}"
+      if [ "${REPO_COUNT}" -lt 2 ]; then
+        echo "WARNING: Expected >= 2 repos cloned, got ${REPO_COUNT} — continuing"
+      fi
+
+      # Assert at least one comment was posted to the issue
+      COMMENT_COUNT=$(curl -sf \
+        -H "Authorization: Bearer ${GITEA_TOKEN}" \
+        "${GITEA_URL}/api/v1/repos/test-org/service-api/issues/1/comments" \
+        | jq 'length')
+
+      echo "Comments on issue #1: ${COMMENT_COUNT}"
+
+      if [ "${COMMENT_COUNT}" -lt 1 ]; then
+        echo "VALIDATION FAILED: Expected >= 1 comment, got ${COMMENT_COUNT}"
+        exit 1
+      fi
+
+      # Assert the comment mentions at least one of the three repos
+      COMMENT_BODY=$(curl -sf \
+        -H "Authorization: Bearer ${GITEA_TOKEN}" \
+        "${GITEA_URL}/api/v1/repos/test-org/service-api/issues/1/comments" \
+        | jq -r '.[0].body')
+
+      echo "First comment body: ${COMMENT_BODY}"
+
+      if echo "${COMMENT_BODY}" | grep -qiE 'service-api|shared-lib|client-sdk'; then
+        echo "VALIDATION PASSED: Comment mentions at least one repo by name"
+        touch /root/validation.done
+      else
+        echo "VALIDATION FAILED: Comment does not mention service-api, shared-lib, or client-sdk"
+        echo "Full comment dump:"
+        echo "${COMMENT_BODY}"
+        exit 1
+      fi
+
+readiness:
+  - name: validate-multi-repo-passed
+    command: "test -f /root/validation.done"

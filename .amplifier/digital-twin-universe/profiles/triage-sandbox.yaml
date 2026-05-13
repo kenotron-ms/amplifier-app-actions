@@ -1,0 +1,317 @@
+# triage-sandbox.yaml
+#
+# Persistent local Gitea sandbox for iterative recipe/prompt development.
+#
+# What this provides:
+#   - A self-contained Gitea instance inside the container exposed on host port 3000
+#   - Repos provisioned from `repos` var: mirrored from GitHub or created empty
+#   - Issues optionally seeded from GitHub (seed_from=github)
+#   - Stays running so developer can iterate:
+#     edit recipe → run amplifier-triage from host → check Gitea UI → tweak → repeat
+#
+# amplifier-triage runs from the HOST machine, not inside the container.
+#
+# Launch:
+#   amplifier-digital-twin launch triage-sandbox.yaml --var repos='test-org/test-repo'
+#
+# With GitHub seeding:
+#   amplifier-digital-twin launch triage-sandbox.yaml \
+#     --var repos='myorg/backend,myorg/frontend' \
+#     --var seed_from=github \
+#     --var GH_TOKEN=$GITHUB_TOKEN
+#
+# Verify (from host):
+#   curl -s http://localhost:3000/api/v1/repos/test-org/test-repo | jq '.name'
+#
+# Gitea UI: http://localhost:3000  (login: admin / admin123)
+
+name: triage-sandbox
+description: >
+  Persistent local Gitea sandbox for iterative recipe/prompt development.
+  Provisions its own Gitea inside the container and exposes it on host
+  port 3000. Stays running while the developer iterates: edit recipe →
+  run amplifier-triage from host → check Gitea UI → tweak → repeat.
+  Optional seed from GitHub (seed_from=github) or a local JSON file
+  (seed_from=file:./path). Template: replace the repos var with your own
+  comma-separated org/repo list (e.g. 'myorg/backend,myorg/frontend').
+
+base:
+  image: ubuntu:24.04
+
+networking:
+  expose_ports:
+    - host_port: 3000
+      container_port: 3000
+
+lifecycle:
+  persist: true
+
+vars:
+  - name: repos
+    required: true
+    description: "Comma-separated org/repo list, e.g. 'myorg/backend,myorg/frontend'"
+  - name: seed_from
+    default: "manual"
+    description: "How to seed repos: 'manual' | 'github' | 'file:./path'"
+  - name: GH_TOKEN
+    default: ""
+    description: "GitHub token — required when seed_from=github"
+  - name: GITEA_PORT
+    default: "3000"
+    description: "Host port forwarded to Gitea inside the container (default 3000)"
+
+passthrough:
+  allow_external: true
+  env:
+    - GH_TOKEN
+
+provision:
+  setup_cmds:
+    # --- Step 1: System dependencies ---
+    - apt-get update -qq && apt-get install -y -q git curl jq python3
+
+    # --- Step 2: Install and configure Gitea ---
+    - |
+      # Detect architecture: uname -m → amd64 or arm64
+      ARCH=$(uname -m)
+      case "${ARCH}" in
+        aarch64|arm64) GITEA_ARCH="arm64" ;;
+        *)             GITEA_ARCH="amd64" ;;
+      esac
+
+      echo "Downloading Gitea 1.21.11 for ${GITEA_ARCH}..."
+      curl -sSL \
+        "https://dl.gitea.com/gitea/1.21.11/gitea-1.21.11-linux-${GITEA_ARCH}" \
+        -o /usr/local/bin/gitea
+      chmod +x /usr/local/bin/gitea
+
+      # Create Gitea directory structure
+      mkdir -p /root/gitea/repos \
+               /root/gitea/data \
+               /root/gitea/log \
+               /root/gitea/custom/conf
+
+      # Write app.ini configuration
+      cat > /root/gitea/custom/conf/app.ini << 'APPINIEOF'
+      APP_NAME = Triage Sandbox
+      RUN_USER = root
+      RUN_MODE = prod
+
+      [repository]
+      ROOT = /root/gitea/repos
+
+      [server]
+      HTTP_PORT = 3000
+      DISABLE_SSH = true
+
+      [database]
+      DB_TYPE = sqlite3
+      PATH = /root/gitea/data/gitea.db
+
+      [security]
+      INSTALL_LOCK = true
+      SECRET_KEY = triage-sandbox-secret-key
+
+      [service]
+      DISABLE_REGISTRATION = true
+      REQUIRE_SIGNIN_VIEW = false
+      APPINIEOF
+
+      # Start Gitea web server in background
+      GITEA_WORK_DIR=/root/gitea GITEA_CUSTOM=/root/gitea/custom \
+        nohup gitea web > /root/gitea/log/gitea.log 2>&1 &
+
+      echo "Waiting for Gitea to start on port 3000..."
+      for i in $(seq 1 30); do
+        if curl -sf http://localhost:3000 > /dev/null 2>&1; then
+          echo "Gitea is up after ${i} attempt(s)"
+          break
+        fi
+        echo "Attempt ${i}/30: Gitea not ready, sleeping 2s..."
+        sleep 2
+      done
+
+      if ! curl -sf http://localhost:3000 > /dev/null 2>&1; then
+        echo "ERROR: Gitea failed to start within 60s"
+        tail -20 /root/gitea/log/gitea.log
+        exit 1
+      fi
+
+    # --- Step 3: Create admin user and generate API token ---
+    - |
+      # Create admin user (--admin flag, no forced password change)
+      GITEA_WORK_DIR=/root/gitea GITEA_CUSTOM=/root/gitea/custom \
+        gitea admin user create \
+          --username admin \
+          --password admin123 \
+          --email admin@triage-sandbox.local \
+          --admin 2>/dev/null || true
+
+      # Generate API token for admin via the REST API
+      TOKEN_RESPONSE=$(curl -sf -X POST \
+        "http://localhost:3000/api/v1/users/admin/tokens" \
+        -H "Content-Type: application/json" \
+        -u "admin:admin123" \
+        -d '{"name":"sandbox-token"}')
+
+      GITEA_TOKEN=$(echo "${TOKEN_RESPONSE}" | jq -r '.sha1')
+
+      if [ -z "${GITEA_TOKEN}" ] || [ "${GITEA_TOKEN}" = "null" ]; then
+        echo "ERROR: Failed to generate Gitea API token"
+        echo "Response was: ${TOKEN_RESPONSE}"
+        exit 1
+      fi
+
+      printf 'GITEA_TOKEN=%s\n' "${GITEA_TOKEN}" > /root/gitea_env
+      chmod 600 /root/gitea_env
+      echo "Admin token saved to /root/gitea_env"
+
+    # --- Step 4: Provision repos from the repos var ---
+    - |
+      . /root/gitea_env
+
+      # Parse comma-separated org/repo list with IFS=','
+      REPOS="${repos}"
+      FIRST_ORG=""
+      FIRST_REPO_NAME=""
+
+      OLD_IFS="${IFS}"
+      IFS=','
+      for FULL_REPO in $REPOS; do
+        FULL_REPO=$(echo "${FULL_REPO}" | tr -d ' ')
+        ORG=$(echo "${FULL_REPO}" | cut -d'/' -f1)
+        REPO_NAME=$(echo "${FULL_REPO}" | cut -d'/' -f2)
+
+        [ -z "${FIRST_ORG}" ] && FIRST_ORG="${ORG}" && FIRST_REPO_NAME="${REPO_NAME}"
+
+        echo "Provisioning ${ORG}/${REPO_NAME}..."
+
+        # Create org (idempotent — ignore 422 Conflict if org already exists)
+        curl -sf -X POST "http://localhost:3000/api/v1/orgs" \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer ${GITEA_TOKEN}" \
+          -d "{\"username\":\"${ORG}\",\"visibility\":\"private\"}" > /dev/null || true
+
+        # Mirror from GitHub (if seed_from=github AND GH_TOKEN set) or create empty repo
+        if [ "${seed_from}" = "github" ] && [ -n "${GH_TOKEN}" ]; then
+          echo "Mirroring ${FULL_REPO} from GitHub..."
+          curl -sf -X POST "http://localhost:3000/api/v1/repos/migrate" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${GITEA_TOKEN}" \
+            -d "{
+              \"clone_addr\": \"https://github.com/${ORG}/${REPO_NAME}\",
+              \"auth_token\": \"${GH_TOKEN}\",
+              \"uid\": 0,
+              \"repo_name\": \"${REPO_NAME}\",
+              \"mirror\": true,
+              \"private\": true,
+              \"service\": 2,
+              \"repo_owner\": \"${ORG}\"
+            }" > /dev/null || true
+        else
+          echo "Creating empty repo ${FULL_REPO} with auto_init=true..."
+          curl -sf -X POST "http://localhost:3000/api/v1/orgs/${ORG}/repos" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${GITEA_TOKEN}" \
+            -d "{\"name\":\"${REPO_NAME}\",\"private\":true,\"auto_init\":true}" > /dev/null || true
+        fi
+
+        echo "Done: ${FULL_REPO}"
+      done
+      IFS="${OLD_IFS}"
+
+      echo "All repos provisioned."
+
+    # --- Step 5: Seed issues from GitHub (only if seed_from=github AND GH_TOKEN set) ---
+    - |
+      . /root/gitea_env
+
+      if [ "${seed_from}" = "github" ] && [ -n "${GH_TOKEN}" ]; then
+        echo "Seeding issues from GitHub..."
+
+        REPOS="${repos}"
+        OLD_IFS="${IFS}"
+        IFS=','
+        for FULL_REPO in $REPOS; do
+          FULL_REPO=$(echo "${FULL_REPO}" | tr -d ' ')
+          ORG=$(echo "${FULL_REPO}" | cut -d'/' -f1)
+          REPO_NAME=$(echo "${FULL_REPO}" | cut -d'/' -f2)
+
+          echo "Fetching open issues for ${FULL_REPO} from GitHub (up to 20)..."
+          ISSUES=$(curl -sf \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${ORG}/${REPO_NAME}/issues?state=open&per_page=20" \
+            || echo '[]')
+
+          ISSUE_COUNT=$(echo "${ISSUES}" | jq '[.[] | select(.pull_request == null)] | length' 2>/dev/null || echo 0)
+          echo "Found ${ISSUE_COUNT} open non-PR issues for ${FULL_REPO}"
+
+          # POST each issue to Gitea (filter out PRs via .pull_request == null)
+          echo "${ISSUES}" | jq -c '.[] | select(.pull_request == null)' 2>/dev/null | \
+          while IFS= read -r ISSUE; do
+            TITLE=$(echo "${ISSUE}" | jq -r '.title')
+            BODY=$(echo "${ISSUE}" | jq -r '.body // ""')
+            PAYLOAD=$(jq -n --arg t "${TITLE}" --arg b "${BODY}" '{"title":$t,"body":$b}')
+            curl -sf -X POST \
+              "http://localhost:3000/api/v1/repos/${ORG}/${REPO_NAME}/issues" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${GITEA_TOKEN}" \
+              -d "${PAYLOAD}" > /dev/null || true
+          done
+
+          echo "Issues seeded for ${FULL_REPO}"
+        done
+        IFS="${OLD_IFS}"
+        echo "Issue seeding complete."
+      else
+        echo "Skipping issue seeding (seed_from=${seed_from}, GH_TOKEN not set or seed_from is not 'github')"
+      fi
+
+    # --- Step 6: Print usage banner and mark sandbox ready ---
+    - |
+      . /root/gitea_env
+
+      # Extract first org/repo for the example command
+      FIRST_ENTRY=$(echo "${repos}" | cut -d',' -f1 | tr -d ' ')
+      FIRST_ORG=$(echo "${FIRST_ENTRY}" | cut -d'/' -f1)
+      FIRST_REPO_NAME=$(echo "${FIRST_ENTRY}" | cut -d'/' -f2)
+
+      echo ""
+      echo "════════════════════════════════════════════════════════════════"
+      echo "  TRIAGE SANDBOX READY"
+      echo "════════════════════════════════════════════════════════════════"
+      echo "  Gitea UI : http://localhost:${GITEA_PORT}"
+      echo "  Login    : admin / admin123"
+      echo "════════════════════════════════════════════════════════════════"
+      echo ""
+      echo "  From your HOST machine, paste these exports before running triage:"
+      echo ""
+      echo "  export GITHUB_API_URL=http://localhost:${GITEA_PORT}/api/v1"
+      echo "  export GITHUB_CLONE_URL=http://localhost:${GITEA_PORT}"
+      echo "  export GITHUB_TOKEN=${GITEA_TOKEN}"
+      echo ""
+      echo "  Example amplifier-triage command (issue #1 in ${FIRST_ORG}/${FIRST_REPO_NAME}):"
+      echo ""
+      echo "    GITHUB_API_URL=http://localhost:${GITEA_PORT}/api/v1 \\"
+      echo "    GITHUB_CLONE_URL=http://localhost:${GITEA_PORT} \\"
+      echo "    GITHUB_TOKEN=${GITEA_TOKEN} \\"
+      echo "    amplifier-triage \\"
+      echo "      --recipe-source ./your-recipe.yaml \\"
+      echo "      --github-token ${GITEA_TOKEN} \\"
+      echo "      --event-path /tmp/event.json"
+      echo ""
+      echo "  Verify the repo was created:"
+      echo "    curl -s http://localhost:${GITEA_PORT}/api/v1/repos/${FIRST_ORG}/${FIRST_REPO_NAME} | jq '.name'"
+      echo ""
+      echo "  To destroy this sandbox:"
+      echo "    amplifier-digital-twin destroy triage-sandbox"
+      echo ""
+      echo "════════════════════════════════════════════════════════════════"
+
+      touch /root/sandbox.ready
+      echo "Sandbox ready. Gitea UI: http://localhost:${GITEA_PORT}"
+
+readiness:
+  - name: triage-sandbox-ready
+    command: "test -f /root/sandbox.ready"

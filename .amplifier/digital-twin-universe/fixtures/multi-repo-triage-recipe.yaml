@@ -1,0 +1,79 @@
+# dtu-multi-repo-triage — Cross-repo investigation recipe for DTU validation
+#
+# Demonstrates multi-repo triage: reads a workspace map to determine which
+# repos to clone, investigates code across repos, and synthesizes findings
+# into a single cross-repo report comment.
+#
+# Context variables supplied by amplifier-triage at runtime:
+#   number, owner, repo, title, body
+#
+# Required environment variables (set by the amplifier-triage caller):
+#   GITHUB_API_URL       — GitHub/Gitea REST API base URL (e.g. http://host/api/v1)
+#   GITHUB_TOKEN         — Personal access token for API authentication
+#   GITHUB_CLONE_URL     — Base URL for git clone (may differ from API URL)
+#   TRIAGE_CONTEXT_MAP_PATH — Path to workspace map on disk (injected via env)
+
+name: dtu-multi-repo-triage
+description: >
+  Cross-repo investigation recipe for DTU validation.
+  Reads a workspace map to identify relevant repos, clones each one via
+  github_checkout_repo, inspects the code for clues, and synthesizes
+  findings into a single cross-repo report comment.
+version: "1.0.0"
+
+steps:
+  # Step 1: Identify and clone relevant repos, gather per-repo findings.
+  - id: identify_repos
+    description: >
+      Read the issue and workspace map. Identify the repos involved in the
+      cross-repo issue. Call github_checkout_repo for EACH relevant repo to
+      clone it into /tmp/workspace/. List what was found in each repo.
+    instruction: |
+      You are investigating a cross-repo issue. The issue is:
+        Title: {{ title }}
+        Body: {{ body }}
+
+      A workspace map has been injected into your context via TRIAGE_CONTEXT_MAP_PATH.
+      It describes the repositories in this project's ecosystem.
+
+      Your task:
+      1. Read the issue title and body carefully.
+      2. Based on the workspace map, determine which repos are relevant to this issue.
+         At a minimum, clone shared-lib and client-sdk. Also clone service-api if relevant.
+      3. For each relevant repo, call github_checkout_repo to clone it.
+      4. Use tool-filesystem to inspect the cloned repos — look for validation logic,
+         version files, schema definitions, or anything relevant to the reported issue.
+      5. Document your findings per repo.
+
+      Output a JSON object with:
+        {
+          "cloned_repos": ["list", "of", "repo", "names"],
+          "findings": {
+            "repo-name": "what you found in this repo"
+          }
+        }
+    output_key: repo_findings
+    timeout: 300
+
+  # Step 2: Synthesize findings into a cross-repo report comment.
+  - id: report
+    depends_on: [identify_repos]
+    description: >
+      Synthesize the per-repo findings into a single cross-repo report comment.
+      Post the comment via github_post_comment.
+    instruction: |
+      You have investigated the following cross-repo issue:
+        Title: {{ title }}
+        Body: {{ body }}
+
+      Investigation results:
+        Cloned repos: {{ repo_findings.cloned_repos }}
+        Findings: {{ repo_findings.findings }}
+
+      Post a comment on issue #{{ number }} in {{ owner }}/{{ repo }} using
+      github_post_comment. The comment must include:
+        1. A list of the repos you investigated (e.g. service-api, shared-lib, client-sdk)
+        2. A brief summary of findings per repo
+        3. A root cause hypothesis explaining the cross-repo mismatch
+        4. Which team or repo should own the fix
+    timeout: 120
