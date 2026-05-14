@@ -16,9 +16,13 @@ providers:
 
 tools:
   - module: tool-github-post-comment
+    source: git+https://github.com/kenotron-ms/amplifier-app-actions@main#subdirectory=amplifier_app_actions/tools/github_post_comment
   - module: tool-github-add-label
+    source: git+https://github.com/kenotron-ms/amplifier-app-actions@main#subdirectory=amplifier_app_actions/tools/github_add_label
   - module: tool-github-checkout-repo
+    source: git+https://github.com/kenotron-ms/amplifier-app-actions@main#subdirectory=amplifier_app_actions/tools/github_checkout_repo
   - module: tool-launch-dtu
+    source: git+https://github.com/kenotron-ms/amplifier-app-actions@main#subdirectory=amplifier_app_actions/tools/launch_dtu
 ---
 
 # amplifier-app-actions Bundle
@@ -35,9 +39,9 @@ This bundle composes three upstream bundles:
 
 ## GitHub-specific tools
 
-The following tools are declared via `[project.entry-points."amplifier.modules"]`
-in `pyproject.toml` and listed under `tools:` in this bundle's frontmatter.  The
-bundle loader mounts them during `session.initialize()`, so they are available in
+The following tools are declared with `git+https://...#subdirectory=...` sources
+in `bundle.md` and listed under `tools:` in this bundle's frontmatter.  The
+bundle loader fetches and mounts them during `prepare()`, so they are available in
 **all** sessions — both the parent session and any child sessions spawned via
 `session.spawn`:
 
