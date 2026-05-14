@@ -8,8 +8,8 @@ includes:
   - bundle: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=behaviors/sessions.yaml
   - bundle: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=behaviors/streaming-ui.yaml
   - bundle: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=behaviors/agents.yaml
-  # Recipes engine
-  - bundle: git+https://github.com/microsoft/amplifier-bundle-recipes@main
+  # Recipes engine — behavior only, avoids transitive full-foundation pull
+  - bundle: git+https://github.com/microsoft/amplifier-bundle-recipes@main#subdirectory=behaviors/recipes.yaml
   # DTU for issue reproduction
   - bundle: git+https://github.com/microsoft/amplifier-bundle-digital-twin-universe@main
 
@@ -37,9 +37,12 @@ providers:
     source: git+https://github.com/microsoft/amplifier-module-provider-github-copilot@main
 
 tools:
-  # File reading and search — essential for code investigation, no bash or web
+  # File operations — read, write, edit
   - module: tool-filesystem
     source: git+https://github.com/microsoft/amplifier-module-tool-filesystem@main
+  # Code search — grep and glob (no web search)
+  - module: tool-search
+    source: git+https://github.com/microsoft/amplifier-module-tool-search@main
   # GitHub-specific tools for issue triage
   - module: tool-github-post-comment
   - module: tool-github-add-label
