@@ -61,8 +61,9 @@ def _is_sha(ref: str) -> bool:
 class LaunchDTUTool:
     """Provision and interact with a Digital Twin Universe instance."""
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any], coordinator: Any = None) -> None:
         self.config = config
+        self.coordinator = coordinator
         self.github_token: str = config.get("github_token") or os.environ.get(
             "GITHUB_TOKEN", ""
         )
@@ -74,11 +75,15 @@ class LaunchDTUTool:
     @property
     def description(self) -> str:
         return (
-            "Launch a Digital Twin Universe instance for integration testing. "
-            "Clones one or more GitHub repositories into /workspace/<repo> and "
-            "runs the provided commands inside an isolated Ubuntu 24.04 container. "
-            "Each repo is specified as 'owner/repo' (default branch) or "
-            "'owner/repo@ref' where ref is a branch, tag, or SHA."
+            "Launch a Digital Twin Universe instance to reproduce or validate a GitHub issue "
+            "in an isolated Ubuntu 24.04 container. "
+            "Two modes: "
+            "(1) goal mode — provide a natural-language description of what to reproduce; "
+            "the tool delegates to dtu-profile-builder which figures out the environment and steps. "
+            "(2) commands mode — provide exact shell commands to run; the tool clones repos and "
+            "runs them directly. "
+            "Repos are specified as 'owner/repo' (default branch) or 'owner/repo@ref' "
+            "where ref is a branch, tag, or SHA."
         )
 
     @property
@@ -90,21 +95,35 @@ class LaunchDTUTool:
                     "type": "array",
                     "items": {"type": "string"},
                     "description": (
-                        "List of repositories to clone, each as 'owner/repo' or "
+                        "Repositories to make available, each as 'owner/repo' or "
                         "'owner/repo@ref' (branch, tag, or SHA)."
+                    ),
+                },
+                "goal": {
+                    "type": "string",
+                    "description": (
+                        "Natural language description of what to reproduce or validate. "
+                        "Use this when you know what needs to happen but not the exact commands. "
+                        "The tool will delegate to dtu-profile-builder to construct and run "
+                        "the appropriate environment. "
+                        "Either goal or commands must be provided."
                     ),
                 },
                 "commands": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Shell commands to run inside the container.",
+                    "description": (
+                        "Exact shell commands to run inside the container. "
+                        "Use this when you have concrete runnable commands. "
+                        "Either goal or commands must be provided."
+                    ),
                 },
                 "description": {
                     "type": "string",
-                    "description": "Optional description for the DTU session.",
+                    "description": "Optional label for logging.",
                 },
             },
-            "required": ["repos", "commands"],
+            "required": ["repos"],
         }
 
     def _generate_profile(self, repos: list[str], commands: list[str]) -> str:
@@ -154,9 +173,84 @@ class LaunchDTUTool:
             f"{commands_yaml}\n"
         )
 
+    async def _execute_with_goal(
+        self,
+        goal: str,
+        repos: list[str],
+        description: str,
+    ) -> ToolResult:
+        """Delegate to dtu-profile-builder via session.spawn for NL-driven reproduction."""
+        if self.coordinator is None:
+            return ToolResult(
+                success=False,
+                output="goal mode requires coordinator — tool was mounted without coordinator reference",
+            )
+
+        spawn = None
+        try:
+            spawn = self.coordinator.get_capability("session.spawn")
+        except Exception:  # noqa: BLE001
+            pass
+
+        if spawn is None:
+            return ToolResult(
+                success=False,
+                output="goal mode requires session.spawn capability to be registered",
+            )
+
+        repos_str = "\n".join(f"  - {r}" for r in repos)
+        instruction = (
+            "You are being invoked headlessly to reproduce a software issue in an isolated "
+            "Digital Twin Universe container. Do NOT ask interactive questions. "
+            "Proceed directly using your best judgment.\n\n"
+            f"Reproduction goal: {goal}\n\n"
+            f"Repositories to make available (clone at the specified ref):\n{repos_str}\n\n"
+            "Steps:\n"
+            "1. Generate a minimal DTU profile that clones the repos at their refs, "
+            "passing GITHUB_TOKEN and ANTHROPIC_API_KEY as env passthrough.\n"
+            "2. Launch the DTU.\n"
+            "3. Run the commands needed to reproduce or validate the goal.\n"
+            "4. Capture all stdout, stderr, and exit codes.\n"
+            "5. Destroy the DTU.\n"
+            "6. Return a structured summary: what you ran, what happened, "
+            "whether reproduction succeeded, and key output lines."
+        )
+        if description:
+            instruction += f"\n\nContext: {description}"
+
+        try:
+            result = await spawn(
+                agent="digital-twin-universe:dtu-profile-builder",
+                instruction=instruction,
+                context_depth="none",
+            )
+            return ToolResult(
+                success=True,
+                output={"mode": "goal", "goal": goal, "repos": repos, "result": result},
+            )
+        except Exception as exc:  # noqa: BLE001
+            return ToolResult(
+                success=False,
+                output=f"dtu-profile-builder delegation failed: {exc}",
+                error={"error": str(exc)},
+            )
+
     async def execute(self, input_data: dict[str, Any]) -> ToolResult:
         repos: list[str] = input_data.get("repos", [])
+        goal: str = input_data.get("goal", "").strip()
         commands: list[str] = input_data.get("commands", [])
+        description: str = input_data.get("description", "")
+
+        if not goal and not commands:
+            return ToolResult(
+                success=False,
+                output="Either 'goal' (natural language) or 'commands' (shell commands) must be provided.",
+            )
+
+        if goal:
+            return await self._execute_with_goal(goal, repos, description)
+
+        # existing commands path below — unchanged
 
         profile_yaml = self._generate_profile(repos, commands)
         profile_path = f"/tmp/dtu-repro-{uuid4()}.yaml"
@@ -246,6 +340,6 @@ async def mount(
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Instantiate and register LaunchDTUTool with the coordinator."""
-    tool = LaunchDTUTool(config or {})
+    tool = LaunchDTUTool(config or {}, coordinator=coordinator)
     await coordinator.mount("tools", tool, name=tool.name)
     return {"tool": tool.name}

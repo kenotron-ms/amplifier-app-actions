@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -405,3 +405,123 @@ async def test_mount_with_none_config_uses_empty_dict():
 
     assert result == {"tool": "launch_dtu"}
     coordinator.mount.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# mount() — coordinator-passing test using AsyncMock
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mount_registers_tool_and_returns_dict():
+    """mount() passes coordinator to LaunchDTUTool and returns the expected dict."""
+    mock_coordinator = MagicMock()
+    mock_coordinator.mount = AsyncMock()
+    result = await mount(mock_coordinator, {"github_token": "ghp_test"})
+    mock_coordinator.mount.assert_called_once()
+    assert result == {"tool": "launch_dtu"}
+
+
+# ---------------------------------------------------------------------------
+# TestGoalMode — natural-language delegation path
+# ---------------------------------------------------------------------------
+
+
+class TestGoalMode:
+    """Tests for the natural-language goal delegation path."""
+
+    @pytest.mark.asyncio
+    async def test_goal_delegates_to_dtu_profile_builder(self, monkeypatch):
+        """When goal is provided, session.spawn is called with dtu-profile-builder."""
+        spawn_calls = []
+
+        async def fake_spawn(**kwargs):
+            spawn_calls.append(kwargs)
+            return {"response": "DTU ran successfully", "session_id": "abc123"}
+
+        mock_coordinator = MagicMock()
+        mock_coordinator.get_capability.return_value = fake_spawn
+
+        tool = LaunchDTUTool({"github_token": "ghp_test"}, coordinator=mock_coordinator)
+        result = await tool.execute(
+            {
+                "repos": ["microsoft/amplifier-core@v1.5.2"],
+                "goal": "Verify that session.spawn propagates the routing matrix fallback chain to child sessions",
+            }
+        )
+
+        assert result.success is True
+        assert len(spawn_calls) == 1
+        assert spawn_calls[0]["agent"] == "digital-twin-universe:dtu-profile-builder"
+        assert "routing matrix" in spawn_calls[0]["instruction"]
+        assert "microsoft/amplifier-core@v1.5.2" in spawn_calls[0]["instruction"]
+        assert spawn_calls[0].get("context_depth") == "none"
+
+    @pytest.mark.asyncio
+    async def test_goal_without_coordinator_returns_error(self):
+        """If coordinator is None, goal mode returns a clear error."""
+        tool = LaunchDTUTool({})  # no coordinator
+        result = await tool.execute(
+            {
+                "repos": ["microsoft/amplifier-core"],
+                "goal": "reproduce the crash",
+            }
+        )
+        assert result.success is False
+        assert "coordinator" in result.output.lower()
+
+    @pytest.mark.asyncio
+    async def test_goal_without_spawn_capability_returns_error(self, monkeypatch):
+        """If session.spawn is not registered, goal mode returns a clear error."""
+        mock_coordinator = MagicMock()
+        mock_coordinator.get_capability.return_value = None
+
+        tool = LaunchDTUTool({}, coordinator=mock_coordinator)
+        result = await tool.execute(
+            {
+                "repos": ["microsoft/amplifier-core"],
+                "goal": "reproduce the crash",
+            }
+        )
+        assert result.success is False
+        assert "session.spawn" in result.output
+
+    @pytest.mark.asyncio
+    async def test_neither_goal_nor_commands_returns_error(self):
+        """If neither goal nor commands is provided, returns a clear error."""
+        tool = LaunchDTUTool({})
+        result = await tool.execute({"repos": ["microsoft/amplifier-core"]})
+        assert result.success is False
+        assert "goal" in result.output.lower() or "commands" in result.output.lower()
+
+    @pytest.mark.asyncio
+    async def test_commands_path_not_affected_by_goal_addition(self, monkeypatch):
+        """Existing commands path still works when goal is absent."""
+        monkeypatch.delenv("GITHUB_CLONE_URL", raising=False)
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        captured = []
+
+        def fake_run(cmd, **kwargs):
+            captured.append(cmd)
+            if "launch" in cmd:
+                r = MagicMock()
+                r.stdout = '{"instance_id": "dtu-test123"}'
+                r.returncode = 0
+                return r
+            r = MagicMock()
+            r.stdout = "ok"
+            r.stderr = ""
+            r.returncode = 0
+            return r
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+
+        tool = LaunchDTUTool({"github_token": "ghp_t"})
+        await tool.execute(
+            {
+                "repos": ["microsoft/amplifier-core"],
+                "commands": ["echo hello"],
+            }
+        )
+        launch_calls = [c for c in captured if "launch" in c]
+        assert len(launch_calls) == 1
