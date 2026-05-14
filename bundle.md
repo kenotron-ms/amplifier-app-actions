@@ -4,12 +4,13 @@ bundle:
   version: 0.1.0
 
 includes:
-  # Foundation behaviors — only what's needed for CI issue triage
-  - bundle: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=behaviors/sessions.yaml
-  - bundle: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=behaviors/streaming-ui.yaml
-  - bundle: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=behaviors/agents.yaml
-  # Recipes engine — behavior only, avoids transitive full-foundation pull
-  - bundle: git+https://github.com/microsoft/amplifier-bundle-recipes@main#subdirectory=behaviors/recipes.yaml
+  # Full foundation — required to register the "foundation:" namespace so that
+  # foundation:explorer, foundation:zen-architect, foundation:bug-hunter, etc.
+  # are resolvable as delegate targets. The three slim behavior includes
+  # (sessions, streaming-ui, agents) and the recipes behavior are all subsumed
+  # by this single include; listing them separately registered them under
+  # "behavior-agents" / "behavior-recipes" namespaces, NOT "foundation".
+  - bundle: git+https://github.com/microsoft/amplifier-foundation@main
   # DTU for issue reproduction
   - bundle: git+https://github.com/microsoft/amplifier-bundle-digital-twin-universe@main
 
@@ -52,12 +53,16 @@ tools:
 
 # amplifier-app-actions Bundle
 
-This bundle composes three upstream bundles:
+This bundle composes two upstream bundles:
 
-- **Foundation** — provides base Amplifier capabilities, core agents, and the
-  standard tool palette.
-- **Recipes bundle** — provides the Amplifier recipe engine and recipe-aware
-  agents pulled from `microsoft/amplifier-bundle-recipes`.
+- **Foundation** (`microsoft/amplifier-foundation`) — registers the `foundation:`
+  namespace so that `foundation:explorer`, `foundation:zen-architect`,
+  `foundation:bug-hunter`, and all other standard agents are available as delegate
+  targets. Also provides the delegate tool, sessions/streaming-ui behaviors, the
+  recipes engine (via its own transitive include of `amplifier-bundle-recipes`),
+  and the standard tool palette. This is the only way to register the `foundation:`
+  namespace — the slim `#subdirectory=behaviors/agents.yaml` approach does NOT
+  work because that nested bundle's name is `behavior-agents`, not `foundation`.
 - **Digital Twin Universe** — provides the `launch_dtu` tool and DTU-aware
   agents for spinning up isolated, containerised reproduction environments pulled
   from `microsoft/amplifier-bundle-digital-twin-universe`.
