@@ -73,10 +73,12 @@ async def test_create_session_returns_session_object():
     assert result is mock_session
 
 
-async def test_create_session_mounts_all_three_github_tools():
-    """create_session mounts github_post_comment, github_add_label, github_checkout_repo.
+async def test_create_session_does_not_mount_github_tools_programmatically():
+    """GitHub tools are now registered via entry points and loaded by the bundle system.
 
-    Verified by inspecting coordinator.mount.call_args_list for name kwargs.
+    create_session() must NOT programmatically call coordinator.mount for any of
+    the GitHub / DTU tool names — that is now done by the bundle loader during
+    session.initialize(), which propagates to all child sessions automatically.
     """
     mock_bundle, _, mock_session = _make_mock_chain()
     mock_load = AsyncMock(return_value=mock_bundle)
@@ -87,30 +89,42 @@ async def test_create_session_mounts_all_three_github_tools():
     mounted_names = [
         c.kwargs.get("name") for c in mock_session.coordinator.mount.call_args_list
     ]
-    assert "github_post_comment" in mounted_names
-    assert "github_add_label" in mounted_names
-    assert "github_checkout_repo" in mounted_names
+    assert "github_post_comment" not in mounted_names
+    assert "github_add_label" not in mounted_names
+    assert "github_checkout_repo" not in mounted_names
+    assert "launch_dtu" not in mounted_names
 
 
-async def test_create_session_mounts_launch_dtu_as_fourth_tool():
-    """create_session mounts launch_dtu as the 4th tool (in addition to the 3 GitHub tools).
+async def test_create_session_bundle_chain_and_spawn_without_tool_mounts():
+    """create_session() calls the bundle chain and registers session.spawn; no tool mounts.
 
-    Verifies that all four tools are mounted and the total count is exactly 4.
+    Consolidates what was previously checked by the two tool-mount tests.  The
+    bundle chain (load_bundle → prepare → create_session) must still run, and the
+    session.spawn capability must still be registered — those responsibilities
+    remain in session_factory.py.
     """
-    mock_bundle, _, mock_session = _make_mock_chain()
+    mock_bundle, mock_prepared, mock_session = _make_mock_chain()
     mock_load = AsyncMock(return_value=mock_bundle)
 
     with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
-        await create_session(Path("/some/bundle"), github_token="test-token")
+        result = await create_session(Path("/some/bundle"), github_token="test-token")
 
-    mounted_names = [
-        c.kwargs.get("name") for c in mock_session.coordinator.mount.call_args_list
-    ]
-    assert "launch_dtu" in mounted_names
-    assert "github_post_comment" in mounted_names
-    assert "github_add_label" in mounted_names
-    assert "github_checkout_repo" in mounted_names
-    assert len(mounted_names) == 4
+    # Bundle chain was invoked
+    mock_load.assert_called_once_with(str(Path("/some/bundle")))
+    mock_bundle.prepare.assert_called_once()
+    mock_prepared.create_session.assert_called_once()
+
+    # session.spawn capability is registered
+    mock_session.coordinator.register_capability.assert_called_once()
+    args, _ = mock_session.coordinator.register_capability.call_args
+    assert args[0] == "session.spawn"
+    assert callable(args[1])
+
+    # Result is the session object
+    assert result is mock_session
+
+    # coordinator.mount was NOT called for any GitHub / DTU tool
+    assert mock_session.coordinator.mount.call_count == 0
 
 
 async def test_create_session_registers_session_spawn_capability():

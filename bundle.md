@@ -13,6 +13,12 @@ providers:
     source: git+https://github.com/microsoft/amplifier-module-provider-openai@main
   - module: provider-github-copilot
     source: git+https://github.com/microsoft/amplifier-module-provider-github-copilot@main
+
+tools:
+  - module: tool-github-post-comment
+  - module: tool-github-add-label
+  - module: tool-github-checkout-repo
+  - module: tool-launch-dtu
 ---
 
 # amplifier-app-actions Bundle
@@ -29,9 +35,11 @@ This bundle composes three upstream bundles:
 
 ## GitHub-specific tools
 
-The following tools are **not** declared in this bundle file. They are mounted
-programmatically by `session_factory.py` at session-creation time, after the
-bundle is loaded and prepared:
+The following tools are declared via `[project.entry-points."amplifier.modules"]`
+in `pyproject.toml` and listed under `tools:` in this bundle's frontmatter.  The
+bundle loader mounts them during `session.initialize()`, so they are available in
+**all** sessions — both the parent session and any child sessions spawned via
+`session.spawn`:
 
 | Tool | Description |
 |------|-------------|
@@ -40,8 +48,7 @@ bundle is loaded and prepared:
 | `github_checkout_repo` | Shallow-clone the repository for file-level inspection |
 | `launch_dtu` | Launch an isolated Digital Twin Universe container to reproduce issues |
 
-Mounting these tools in code (rather than in the bundle declaration) allows each
-invocation to inject the `github_token` from the calling environment, avoiding
-any credential leakage into bundle configuration.
+Credentials are read from environment variables at call time; no token is passed
+through bundle configuration.
 
 @amplifier_app_actions:context/reproduction.md
