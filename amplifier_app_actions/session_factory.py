@@ -119,11 +119,16 @@ async def create_session(
             spawn(child_bundle: Bundle, instruction: str, *, parent_session=...)
 
         Agent resolution:
-        - External bundle ref (contains ":" or starts with "git+"):
-          load via load_bundle() so the child gets the named bundle's tools.
+        - namespace:agent-path (e.g. "foundation:explorer",
+          "digital-twin-universe:dtu-profile-builder"):
+          Resolved via bundle.source_base_paths — the parent bundle maps each
+          loaded namespace to its local cache directory, so we construct the
+          path to the agent's .md file without a network round-trip.
+        - Direct URI (starts with "git+" or has "//" after the colon):
+          Passed verbatim to load_bundle() (git+https://, https://, file://).
         - Local agent name (no ":" separator):
-          reuse the parent bundle so the child inherits the full tool surface
-          (github_post_comment, github_add_label, github_checkout_repo,
+          Reuse the parent bundle so the child session inherits the full tool
+          surface (github_post_comment, github_add_label, github_checkout_repo,
           launch_dtu, tool-filesystem, tool-search, etc.).
         """
         from amplifier_foundation import load_bundle as _load_bundle  # noqa: PLC0415
@@ -139,8 +144,41 @@ async def create_session(
             )
 
         if ":" in agent_str or agent_str.startswith("git+"):
-            # External bundle reference — load it so the child gets its own tools.
-            child_bundle = await _load_bundle(agent_str)
+            # Distinguish between proper URI schemes and namespace:agent-path references.
+            #
+            # Proper URIs have "//" immediately after the colon (https://, file://)
+            # or start with "git+" (git+https://).
+            #
+            # namespace:agent-path has a plain identifier before the colon, e.g.:
+            #   "foundation:explorer"
+            #   "digital-twin-universe:dtu-profile-builder"
+            #
+            colon_idx = agent_str.index(":")
+            after_colon = agent_str[colon_idx + 1 :]
+            is_uri = after_colon.startswith("//") or agent_str.startswith("git+")
+
+            if is_uri:
+                # Direct URI reference (git+https://, https://, file://, etc.)
+                child_bundle = await _load_bundle(agent_str)
+            else:
+                # namespace:agent-path — resolve the agent .md file via the parent
+                # bundle's source_base_paths, which maps every loaded namespace to its
+                # local cache directory.  This avoids re-cloning and works in
+                # network-free CI environments.
+                namespace = agent_str[:colon_idx]
+                agent_path = after_colon
+                ns_base = (
+                    bundle.source_base_paths.get(namespace)
+                    if bundle.source_base_paths
+                    else None
+                )
+                if ns_base is not None:
+                    agent_file = ns_base / "agents" / f"{agent_path}.md"
+                    child_bundle = await _load_bundle(str(agent_file))
+                else:
+                    # Namespace not in source_base_paths — fall back to a direct
+                    # load so the caller gets a descriptive error from the bundle loader.
+                    child_bundle = await _load_bundle(agent_str)
         else:
             # Local agent name — reuse the parent bundle so the child session
             # inherits the full amplifier-app-actions tool surface.

@@ -280,14 +280,22 @@ async def test_create_session_does_not_set_env_when_token_is_empty(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-async def test_spawn_fn_resolves_agent_string_and_calls_prepared_spawn():
-    """_spawn_fn resolves the 'agent' kwarg to a Bundle, then calls
-    prepared.spawn(child_bundle, instruction, parent_session=session).
+async def test_spawn_fn_resolves_namespace_agent_via_source_base_paths(tmp_path):
+    """_spawn_fn resolves namespace:agent-path via bundle.source_base_paths.
 
     The delegate tool calls: spawn(agent="foundation:explorer", instruction="...", context_depth="recent")
-    PreparedBundle.spawn() expects: spawn(child_bundle, instruction, *, parent_session=session)
+    _spawn_fn should look up 'foundation' in bundle.source_base_paths, then load
+    the agent .md file from {ns_base}/agents/explorer.md rather than passing the
+    raw string "foundation:explorer" to load_bundle (which fails — "foundation:" is
+    not a recognised URI scheme).
     """
     mock_bundle, mock_prepared, mock_session = _make_mock_chain()
+
+    # Provide a real Path for the foundation namespace cache directory.
+    foundation_base = tmp_path / "foundation-cache"
+    (foundation_base / "agents").mkdir(parents=True)
+    mock_bundle.source_base_paths = {"foundation": foundation_base}
+
     mock_load = AsyncMock(return_value=mock_bundle)
 
     with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
@@ -302,7 +310,6 @@ async def test_spawn_fn_resolves_agent_string_and_calls_prepared_spawn():
     mock_prepared.spawn.reset_mock()
     mock_prepared.spawn.return_value = {"spawned": True}
 
-    # The inner load_bundle used inside _spawn_fn resolves the agent string
     mock_inner_load = AsyncMock(return_value=mock_child_bundle)
 
     with patch("amplifier_foundation.load_bundle", mock_inner_load):
@@ -312,16 +319,101 @@ async def test_spawn_fn_resolves_agent_string_and_calls_prepared_spawn():
             context_depth="recent",
         )
 
-    # Should have resolved the agent string to a Bundle
-    mock_inner_load.assert_called_once_with("foundation:explorer")
+    # Should load the agent .md file from the namespace's local cache path.
+    expected_agent_path = str(foundation_base / "agents" / "explorer.md")
+    mock_inner_load.assert_called_once_with(expected_agent_path)
 
-    # Should have called prepared.spawn with the right positional + keyword args
+    # Should call prepared.spawn with the resolved child bundle.
     mock_prepared.spawn.assert_called_once_with(
         mock_child_bundle,
         "investigate this issue",
         parent_session=mock_session,
     )
     assert result == {"spawned": True}
+
+
+async def test_spawn_fn_dtu_profile_builder_resolves_via_source_base_paths(tmp_path):
+    """_spawn_fn resolves 'digital-twin-universe:dtu-profile-builder' correctly.
+
+    This is the regression test for the bug:
+        dtu-profile-builder delegation failed: No handler for URI: digital-twin-universe:dtu-profile-builder
+
+    Previously _spawn_fn passed "digital-twin-universe:dtu-profile-builder" directly to
+    load_bundle(), which tried to treat it as a URI.  The 'digital-twin-universe:' prefix
+    is not a recognised URI scheme, so load_bundle raised BundleNotFoundError.
+
+    The fix: detect namespace:agent-path format and resolve via source_base_paths.
+    """
+    mock_bundle, mock_prepared, mock_session = _make_mock_chain()
+
+    dtu_base = tmp_path / "dtu-cache"
+    (dtu_base / "agents").mkdir(parents=True)
+    mock_bundle.source_base_paths = {"digital-twin-universe": dtu_base}
+
+    mock_load = AsyncMock(return_value=mock_bundle)
+
+    with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
+        await create_session(Path("/some/bundle"), github_token="test-token")
+
+    args, _ = mock_session.coordinator.register_capability.call_args
+    spawn_fn = args[1]
+
+    mock_child_bundle = MagicMock()
+    mock_inner_load = AsyncMock(return_value=mock_child_bundle)
+
+    with patch("amplifier_foundation.load_bundle", mock_inner_load):
+        await spawn_fn(
+            agent="digital-twin-universe:dtu-profile-builder",
+            instruction="build a DTU profile",
+        )
+
+    expected = str(dtu_base / "agents" / "dtu-profile-builder.md")
+    mock_inner_load.assert_called_once_with(expected)
+
+
+async def test_spawn_fn_git_uri_still_loads_directly():
+    """_spawn_fn passes git+https:// URIs directly to load_bundle (no namespace lookup)."""
+    mock_bundle, mock_prepared, mock_session = _make_mock_chain()
+    mock_load = AsyncMock(return_value=mock_bundle)
+
+    with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
+        await create_session(Path("/some/bundle"), github_token="test-token")
+
+    args, _ = mock_session.coordinator.register_capability.call_args
+    spawn_fn = args[1]
+
+    mock_child_bundle = MagicMock()
+    mock_inner_load = AsyncMock(return_value=mock_child_bundle)
+
+    git_uri = "git+https://github.com/microsoft/amplifier-foundation@main"
+    with patch("amplifier_foundation.load_bundle", mock_inner_load):
+        await spawn_fn(agent=git_uri, instruction="use this bundle")
+
+    # Must be passed verbatim — no source_base_paths lookup for real URIs.
+    mock_inner_load.assert_called_once_with(git_uri)
+
+
+async def test_spawn_fn_namespace_not_in_source_base_paths_falls_back_to_direct_load():
+    """When namespace is absent from source_base_paths, fall back to direct load_bundle call."""
+    mock_bundle, mock_prepared, mock_session = _make_mock_chain()
+    mock_bundle.source_base_paths = {}  # empty — 'unknown-bundle' is not registered
+
+    mock_load = AsyncMock(return_value=mock_bundle)
+
+    with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
+        await create_session(Path("/some/bundle"), github_token="test-token")
+
+    args, _ = mock_session.coordinator.register_capability.call_args
+    spawn_fn = args[1]
+
+    mock_child_bundle = MagicMock()
+    mock_inner_load = AsyncMock(return_value=mock_child_bundle)
+
+    with patch("amplifier_foundation.load_bundle", mock_inner_load):
+        await spawn_fn(agent="unknown-bundle:some-agent", instruction="do something")
+
+    # Falls back to direct load — will surface a clear error from the bundle loader.
+    mock_inner_load.assert_called_once_with("unknown-bundle:some-agent")
 
 
 async def test_spawn_fn_raises_when_no_agent_provided():
