@@ -110,6 +110,96 @@ For runs more involved than a single prompt, point the action at a recipe or att
 
 ## Local testing
 
+### Install
+
+From your local checkout, install the `amplifier-triage` command as a uv tool:
+
+```bash
+uv tool install --editable .
+```
+
+Or run without installing (one-off):
+
+```bash
+uv run amplifier-triage --help
+```
+
+### Test a recipe
+
+This example uses issue #3 from `kenotron-ms/amplifier-actions-example` and the five-stage investigation recipe from that repo (understand → clone → investigate → reproduce → report).
+
+**1. Create `test-event.json`:**
+
+```json
+{
+  "action": "labeled",
+  "issue": {
+    "number": 3,
+    "title": "Sub-agent sessions ignore routing matrix fallback chains — child always uses first model, never falls back",
+    "body": "## Problem\n\nWhen the routing matrix bundle defines a fallback chain (e.g. `claude-opus → claude-sonnet → claude-haiku`), the parent session correctly walks the chain when a model is unavailable. However, child sessions spawned via `delegate()` only receive the first resolved model — the rest of the chain is dropped. If that model fails, the child errors rather than falling back.\n\n## Affected repos\n\n- `microsoft/amplifier-core` — `session.spawn` / config propagation into child sessions\n- `microsoft/amplifier-bundle-routing-matrix` — how routing config and fallback chains are structured in the bundle\n- `microsoft/amplifier-foundation` — `delegate()` implementation and how config is passed to spawned sessions\n\n## Steps to reproduce\n\n1. Install the routing matrix bundle with a multi-model fallback chain configured\n2. Run a session that delegates to a sub-agent with `model_role: coding`\n3. Simulate the first model being unavailable (rate limit or disable it)\n4. Observe parent session falls back to next model in chain — works correctly\n5. Observe child session errors with model unavailable rather than falling back\n\n## Expected behaviour\n\nChild sessions inherit the full routing config including the complete fallback chain.\n\n## Actual behaviour\n\nChild sessions only have the first/resolved model. The fallback chain is not present in the child's config. Child fails hard on model unavailability.",
+    "user": { "login": "kenotron-ms" },
+    "labels": [
+      { "name": "bug" },
+      { "name": "high-priority" },
+      { "name": "needs-investigation" }
+    ]
+  },
+  "repository": {
+    "name": "amplifier-actions-example",
+    "owner": { "login": "kenotron-ms" }
+  }
+}
+```
+
+**2. Run:**
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-... \
+GITHUB_TOKEN=ghp_...         \
+amplifier-triage              \
+  --recipe-source ~/workspace/ms/amplifier-actions-example/.github/amplifier/investigate-recipe.yaml \
+  --event-path    ./test-event.json
+```
+
+The recipe runs five stages: extract a structured understanding of the issue, clone the three affected Amplifier repos (`amplifier-core`, `amplifier-bundle-routing-matrix`, `amplifier-foundation`), read source and form a root-cause hypothesis with `file:line` evidence, attempt reproduction in a DTU container, then post a structured report comment and apply `bug-confirmed`, `needs-repro-steps`, or `investigation-complete` as appropriate.
+
+### Test an attractor
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-... \
+GITHUB_TOKEN=ghp_...         \
+amplifier-triage              \
+  --attractor-source ./path/to/attractor.dot \
+  --event-path       ./test-event.json
+```
+
+`--event-path` defaults to `$GITHUB_EVENT_PATH`. Omit it (and leave the env var unset) to run without GitHub event context.
+
+### Minimal test event
+
+Save this as `test-event.json` to simulate a GitHub issue:
+
+```json
+{
+  "action": "opened",
+  "issue": {
+    "number": 1,
+    "title": "Example issue",
+    "body": "Steps to reproduce...",
+    "user": { "login": "octocat" },
+    "labels": []
+  },
+  "repository": {
+    "name": "my-repo",
+    "owner": { "login": "my-org" }
+  }
+}
+```
+
+For a pull request event, replace `"issue"` with `"pull_request"` and add `"base": {"ref": "main"}` and `"head": {"ref": "my-branch"}` inside it.
+
+### Point at Gitea or a DTU
+
 You can run this action against a local Gitea sandbox or a Digital Twin Universe (DTU) instance instead of github.com. Override the API and clone endpoints via environment variables:
 
 ```yaml

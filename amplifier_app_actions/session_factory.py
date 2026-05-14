@@ -99,7 +99,10 @@ async def create_session(
     session = await prepared.create_session(session_cwd=session_cwd)
 
     async def _spawn_fn(**kwargs: Any) -> Any:
-        """Shim between the delegate tool's spawn API and PreparedBundle.spawn().
+        """Shim between two callers and PreparedBundle.spawn().
+
+        The recipe executor calls:
+            spawn(agent_name="triage", instruction="...", parent_session=..., ...)
 
         The delegate tool calls:
             spawn(agent="foundation:explorer", instruction="...", context_depth="recent")
@@ -107,20 +110,34 @@ async def create_session(
         PreparedBundle.spawn() expects:
             spawn(child_bundle: Bundle, instruction: str, *, parent_session=...)
 
-        This shim resolves the agent string to a Bundle and drops kwargs that
-        prepared.spawn() does not understand.
+        Agent resolution:
+        - External bundle ref (contains ":" or starts with "git+"):
+          load via load_bundle() so the child gets the named bundle's tools.
+        - Local agent name (no ":" separator):
+          reuse the parent bundle so the child inherits the full tool surface
+          (github_post_comment, github_add_label, github_checkout_repo,
+          launch_dtu, tool-filesystem, tool-search, etc.).
         """
         from amplifier_foundation import load_bundle as _load_bundle  # noqa: PLC0415
 
-        agent_str: str = kwargs.get("agent", "")
+        # executor passes agent_name=; delegate tool passes agent=
+        agent_str: str = kwargs.get("agent_name") or kwargs.get("agent", "")
         instruction: str = kwargs.get("instruction", "")
 
         if not agent_str:
             raise ValueError(
-                "session.spawn requires 'agent' — got: " + repr(list(kwargs.keys()))
+                "session.spawn requires 'agent' or 'agent_name' — got: "
+                + repr(list(kwargs.keys()))
             )
 
-        child_bundle = await _load_bundle(agent_str)
+        if ":" in agent_str or agent_str.startswith("git+"):
+            # External bundle reference — load it so the child gets its own tools.
+            child_bundle = await _load_bundle(agent_str)
+        else:
+            # Local agent name — reuse the parent bundle so the child session
+            # inherits the full amplifier-app-actions tool surface.
+            child_bundle = bundle
+
         return await prepared.spawn(
             child_bundle,
             instruction,
