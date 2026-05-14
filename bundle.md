@@ -14,6 +14,11 @@ providers:
   - module: provider-github-copilot
     source: git+https://github.com/microsoft/amplifier-module-provider-github-copilot@main
 
+tools:
+  - module: tool-github-post-comment
+  - module: tool-github-add-label
+  - module: tool-github-checkout-repo
+  - module: tool-launch-dtu
 ---
 
 # amplifier-app-actions Bundle
@@ -30,11 +35,11 @@ This bundle composes three upstream bundles:
 
 ## GitHub-specific tools
 
-The following tools are package directories under `amplifier_app_actions/tools/`
-and are injected into `bundle.tools` programmatically by `session_factory.py`
-before `bundle.prepare()` is called.  The bundle loader then mounts them during
-`session.initialize()`, so they are available in **all** sessions — both the
-parent session and any child sessions spawned via `session.spawn`:
+The following tools are declared via `[project.entry-points."amplifier.modules"]`
+in `pyproject.toml` and listed under `tools:` in this bundle's frontmatter.  The
+bundle loader mounts them during `session.initialize()`, so they are available in
+**all** sessions — both the parent session and any child sessions spawned via
+`session.spawn`:
 
 | Tool | Description |
 |------|-------------|

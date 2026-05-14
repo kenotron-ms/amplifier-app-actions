@@ -154,34 +154,36 @@ async def test_prompt_source_reads_file_and_uses_as_prompt(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 4. Recipe mode calls session.execute with the recipe path in the message
+# 4. Recipe mode calls 'recipes' tool with recipe_path
 # ---------------------------------------------------------------------------
 
 
-async def test_recipe_mode_calls_session_execute_with_recipe_path(tmp_path):
-    """run() in RECIPE mode calls session.execute with a message containing the recipe path."""
+async def test_recipe_mode_calls_recipes_tool_with_recipe_path(tmp_path):
+    """run() in RECIPE mode calls the 'recipes' tool execute with {'recipe_path': ...}."""
     recipe_file = tmp_path / "triage.yaml"
     recipe_file.write_text("steps:\n  - agent: triage\n")
 
-    mock_session = _make_mock_session()
+    mock_recipe_tool = MagicMock()
+    mock_recipe_tool.execute = AsyncMock()
+    mock_session = _make_mock_session(tools={"recipes": mock_recipe_tool})
 
     with patch(
         "amplifier_app_actions.cli.create_session", AsyncMock(return_value=mock_session)
     ):
         await run(recipe_source=str(recipe_file))
 
-    mock_session.execute.assert_called_once()
-    called_with: str = mock_session.execute.call_args[0][0]
-    assert str(recipe_file) in called_with
+    mock_recipe_tool.execute.assert_called_once()
+    call_input = mock_recipe_tool.execute.call_args[0][0]
+    assert call_input["recipe_path"] == str(recipe_file)
 
 
 # ---------------------------------------------------------------------------
-# 5. Recipe mode with event: session.execute message contains event context
+# 5. Recipe mode passes event vars as context dict (owner/repo/number)
 # ---------------------------------------------------------------------------
 
 
-async def test_recipe_mode_with_event_session_execute_contains_event_context(tmp_path):
-    """run() in RECIPE mode with an event prepends context block and calls session.execute."""
+async def test_recipe_mode_passes_event_vars_as_context_dict(tmp_path):
+    """run() in RECIPE mode passes event owner/repo/number in the context dict."""
     recipe_file = tmp_path / "recipe.yaml"
     recipe_file.write_text("steps: []")
 
@@ -190,19 +192,20 @@ async def test_recipe_mode_with_event_session_execute_contains_event_context(tmp
         json.dumps(_pr_event_payload(owner="acme", repo="backend", number=7))
     )
 
-    mock_session = _make_mock_session()
+    mock_recipe_tool = MagicMock()
+    mock_recipe_tool.execute = AsyncMock()
+    mock_session = _make_mock_session(tools={"recipes": mock_recipe_tool})
 
     with patch(
         "amplifier_app_actions.cli.create_session", AsyncMock(return_value=mock_session)
     ):
         await run(recipe_source=str(recipe_file), event_path=str(event_file))
 
-    mock_session.execute.assert_called_once()
-    called_with: str = mock_session.execute.call_args[0][0]
-    # Recipe path and event context both appear in the message
-    assert str(recipe_file) in called_with
-    assert "acme" in called_with
-    assert "backend" in called_with
+    call_input = mock_recipe_tool.execute.call_args[0][0]
+    context = call_input["context"]
+    assert context["owner"] == "acme"
+    assert context["repo"] == "backend"
+    assert context["number"] == 7
 
 
 # ---------------------------------------------------------------------------
@@ -284,45 +287,47 @@ async def test_prompt_mode_without_event_uses_content_directly():
 
 
 # ---------------------------------------------------------------------------
-# 10. Attractor mode calls session.execute with attractor path in message
+# 10. Attractor mode calls attractor tool with attractor_path and context=None
 # ---------------------------------------------------------------------------
 
 
-async def test_attractor_mode_calls_session_execute_with_attractor_path(tmp_path):
-    """run() in ATTRACTOR mode calls session.execute with a message containing the attractor path."""
+async def test_attractor_mode_calls_attractor_tool_with_attractor_path(tmp_path):
+    """run() in ATTRACTOR mode calls the 'attractors' tool execute with attractor_path and context=None."""
     attractor_file = tmp_path / "triage.dot"
     attractor_file.write_text("digraph G { A -> B; }")
 
-    mock_session = _make_mock_session()
+    mock_attractor_tool = MagicMock()
+    mock_attractor_tool.execute = AsyncMock()
+    mock_session = _make_mock_session(tools={"attractors": mock_attractor_tool})
 
     with patch(
         "amplifier_app_actions.cli.create_session", AsyncMock(return_value=mock_session)
     ):
         await run(attractor_source=str(attractor_file), github_token="token")
 
-    mock_session.execute.assert_called_once()
-    called_with: str = mock_session.execute.call_args[0][0]
-    assert str(attractor_file) in called_with
+    mock_attractor_tool.execute.assert_called_once()
+    call_input = mock_attractor_tool.execute.call_args[0][0]
+    assert call_input["attractor_path"] == str(attractor_file)
+    assert call_input["context"] is None
 
 
 # ---------------------------------------------------------------------------
-# 11. Attractor mode with no event: session.execute still called (no RuntimeError)
+# 11. Attractor mode raises RuntimeError when attractor tool is not mounted
 # ---------------------------------------------------------------------------
 
 
-async def test_attractor_mode_without_event_calls_session_execute(tmp_path):
-    """run() in ATTRACTOR mode calls session.execute regardless of event presence."""
+async def test_attractor_mode_raises_when_attractor_tool_not_mounted(tmp_path):
+    """run() in ATTRACTOR mode raises RuntimeError when no 'attractors' tool is in coordinator."""
     attractor_file = tmp_path / "triage.dot"
     attractor_file.write_text("digraph G { A -> B; }")
 
-    mock_session = _make_mock_session()
+    mock_session = _make_mock_session(tools={})
 
-    with patch(
-        "amplifier_app_actions.cli.create_session",
-        AsyncMock(return_value=mock_session),
+    with (
+        patch(
+            "amplifier_app_actions.cli.create_session",
+            AsyncMock(return_value=mock_session),
+        ),
+        pytest.raises(RuntimeError, match="Attractor tool not mounted"),
     ):
         await run(attractor_source=str(attractor_file))
-
-    mock_session.execute.assert_called_once()
-    called_with: str = mock_session.execute.call_args[0][0]
-    assert str(attractor_file) in called_with
