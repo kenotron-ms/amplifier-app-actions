@@ -99,7 +99,7 @@ async def run(
             raise RuntimeError(
                 f"Recipe tool not mounted on coordinator. Available tools: {list(tools.keys())}"
             )
-        await recipe_tool.execute({"recipe_path": content, "context": event})
+        await recipe_tool.execute({"operation": "execute", "recipe_path": content, "context": event})
 
     elif itype == InstructionType.ATTRACTOR:
         tools = session.coordinator.get("tools") or {}
