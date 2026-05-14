@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import logging
 import os
 from pathlib import Path
 from typing import Any
+
+from amplifier_app_cli.ui import CLIDisplaySystem  # type: ignore[import-untyped]
 
 from amplifier_app_actions.events import format_context_block, parse_event
 from amplifier_app_actions.instruction import InstructionType, resolve_instruction
@@ -93,32 +94,44 @@ async def run(
         await session.execute(f"{ctx_prefix}{content}")
 
     elif itype == InstructionType.RECIPE:
-        # Build an explicit context dict from the parsed event so the LLM does not
-        # have to re-parse the human-readable ctx_prefix.  The recipe template uses
-        # {{ context.number }}, {{ context.owner }}, etc. — these must be present.
+        # Build the context dict with event fields nested under "context".
+        # The recipes engine spreads the top-level context dict flat into the
+        # template environment, so {{ context.number }} resolves by looking up
+        # the key "context" first, then ".number" inside it.
         recipe_context: dict[str, Any] = {}
         if event is not None:
             recipe_context = {
-                "number": event["number"],
-                "owner": event["owner"],
-                "repo": event["repo"],
-                "title": event["title"],
-                "body": event["body"],
-                "author": event["author"],
-                "labels": event["labels"],
-                "event_type": event["event_type"],
+                "context": {
+                    "number": event["number"],
+                    "owner": event["owner"],
+                    "repo": event["repo"],
+                    "title": event["title"],
+                    "body": event["body"],
+                    "author": event["author"],
+                    "labels": event["labels"],
+                    "event_type": event["event_type"],
+                }
             }
-        context_json = json.dumps(recipe_context)
 
-        # The LLM calls the recipes tool; streaming UI output flows through normally.
-        await session.execute(
-            f"{ctx_prefix}"
-            f"Execute the recipe at: {content}\n\n"
-            "Call the recipes tool with:\n"
-            "  operation: execute\n"
-            f"  recipe_path: {content}\n"
-            + (f"  context: {context_json}\n\n" if recipe_context else "\n")
-            + "Run it directly — do not summarise or skip steps."
+        # The recipes executor calls coordinator.display_system.show_message()
+        # for progress banners, and child sessions inherit it for token
+        # streaming.  display_system is None until an orchestrator starts
+        # (i.e. session.execute() is called), so we inject one directly
+        # before calling the tool — this lets us bypass the LLM relay
+        # entirely and call the recipes tool with a deterministic context.
+        coordinator = session.coordinator
+        if coordinator.display_system is None:
+            coordinator.display_system = CLIDisplaySystem()
+
+        tools = coordinator.get("tools") or {}
+        recipe_tool = tools.get("recipes")
+        if recipe_tool is None:
+            raise RuntimeError(
+                f"Recipes tool not mounted on coordinator. "
+                f"Available tools: {sorted(tools.keys())}"
+            )
+        await recipe_tool.execute(
+            {"operation": "execute", "recipe_path": content, "context": recipe_context}
         )
 
     elif itype == InstructionType.ATTRACTOR:

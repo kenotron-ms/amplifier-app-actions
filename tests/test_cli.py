@@ -16,12 +16,25 @@ from amplifier_app_actions.cli import run
 # ---------------------------------------------------------------------------
 
 
+def _make_mock_recipe_tool() -> MagicMock:
+    """Return a mock recipes tool with an async execute method."""
+    tool = MagicMock()
+    tool.execute = AsyncMock(return_value=None)
+    return tool
+
+
 def _make_mock_session(tools: dict | None = None):
-    """Build a minimal mock session for cli.run() tests."""
+    """Build a minimal mock session for cli.run() tests.
+
+    coordinator.display_system starts as None (mirroring the real coordinator
+    before session.execute() starts the orchestrator).  RECIPE-mode tests can
+    assert it was set, and coordinator.get("tools") returns the supplied dict.
+    """
     mock_session = MagicMock()
     mock_session.execute = AsyncMock()
 
     mock_coordinator = MagicMock()
+    mock_coordinator.display_system = None
     mock_coordinator.get = MagicMock(return_value=tools if tools is not None else {})
     mock_session.coordinator = mock_coordinator
     return mock_session
@@ -154,53 +167,112 @@ async def test_prompt_source_reads_file_and_uses_as_prompt(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 4. Recipe mode calls session.execute with recipe path
+# 4. Recipe mode calls recipe_tool.execute() directly (not session.execute)
 # ---------------------------------------------------------------------------
 
 
-async def test_recipe_mode_calls_session_execute_with_recipe_path(tmp_path):
-    """run() in RECIPE mode calls session.execute with a string containing the recipe path."""
+async def test_recipe_mode_calls_recipe_tool_execute_directly(tmp_path):
+    """run() in RECIPE mode calls recipe_tool.execute() directly, not session.execute().
+
+    The recipes tool is called with a deterministic context dict rather than
+    asking the LLM to relay a JSON blob from a text prompt.
+    """
     recipe_file = tmp_path / "triage.yaml"
     recipe_file.write_text("steps:\n  - agent: triage\n")
 
-    mock_session = _make_mock_session(tools={})
+    mock_recipe_tool = _make_mock_recipe_tool()
+    mock_session = _make_mock_session(tools={"recipes": mock_recipe_tool})
 
     with patch(
         "amplifier_app_actions.cli.create_session", AsyncMock(return_value=mock_session)
     ):
         await run(recipe_source=str(recipe_file))
 
-    mock_session.execute.assert_called_once()
-    called_with: str = mock_session.execute.call_args[0][0]
-    assert str(recipe_file) in called_with
+    # recipe_tool.execute must be called; session.execute must NOT be called.
+    mock_recipe_tool.execute.assert_called_once()
+    mock_session.execute.assert_not_called()
+
+    call_payload = mock_recipe_tool.execute.call_args[0][0]
+    assert call_payload["operation"] == "execute"
+    assert call_payload["recipe_path"] == str(recipe_file)
 
 
 # ---------------------------------------------------------------------------
-# 5. Recipe mode session.execute includes event context (owner/repo)
+# 5. Recipe mode injects CLIDisplaySystem before calling the tool
 # ---------------------------------------------------------------------------
 
 
-async def test_recipe_mode_session_execute_includes_event_context(tmp_path):
-    """run() in RECIPE mode calls session.execute with a string containing the event owner and repo."""
+async def test_recipe_mode_injects_display_system(tmp_path):
+    """run() in RECIPE mode sets coordinator.display_system when it is None.
+
+    display_system is None until the orchestrator starts.  Injecting
+    CLIDisplaySystem directly lets the recipes executor emit progress banners
+    and lets child sessions stream tokens through the same display pipeline.
+    """
+    from amplifier_app_cli.ui import CLIDisplaySystem  # type: ignore[import-untyped]
+
+    recipe_file = tmp_path / "recipe.yaml"
+    recipe_file.write_text("steps: []")
+
+    mock_recipe_tool = _make_mock_recipe_tool()
+    mock_session = _make_mock_session(tools={"recipes": mock_recipe_tool})
+    assert mock_session.coordinator.display_system is None  # starts None
+
+    with patch(
+        "amplifier_app_actions.cli.create_session", AsyncMock(return_value=mock_session)
+    ):
+        await run(recipe_source=str(recipe_file))
+
+    assert isinstance(mock_session.coordinator.display_system, CLIDisplaySystem)
+
+
+# ---------------------------------------------------------------------------
+# 5b. Recipe mode passes context nested under "context" key to recipe_tool
+# ---------------------------------------------------------------------------
+
+
+async def test_recipe_mode_context_nested_under_context_key(tmp_path):
+    """run() in RECIPE mode passes context with event fields nested under 'context'.
+
+    The Amplifier recipes engine spreads the top-level context dict flat into
+    the template environment.  {{ context.number }} resolves by looking up the
+    literal key 'context' first, then '.number' inside it.  The context passed
+    to recipe_tool.execute() must be {"context": {event fields}}, not flat.
+    """
     recipe_file = tmp_path / "recipe.yaml"
     recipe_file.write_text("steps: []")
 
     event_file = tmp_path / "event.json"
     event_file.write_text(
-        json.dumps(_pr_event_payload(owner="acme", repo="backend", number=7))
+        json.dumps(
+            _issue_event_payload(
+                owner="myorg", repo="myrepo", number=99, title="T", body="B"
+            )
+        )
     )
 
-    mock_session = _make_mock_session(tools={})
+    mock_recipe_tool = _make_mock_recipe_tool()
+    mock_session = _make_mock_session(tools={"recipes": mock_recipe_tool})
 
     with patch(
         "amplifier_app_actions.cli.create_session", AsyncMock(return_value=mock_session)
     ):
         await run(recipe_source=str(recipe_file), event_path=str(event_file))
 
-    mock_session.execute.assert_called_once()
-    called_with: str = mock_session.execute.call_args[0][0]
-    assert "acme" in called_with
-    assert "backend" in called_with
+    call_payload = mock_recipe_tool.execute.call_args[0][0]
+    context_payload = call_payload["context"]
+
+    assert "context" in context_payload, (
+        "context must be nested under a 'context' key so {{ context.field }} resolves"
+    )
+    ctx = context_payload["context"]
+    assert ctx["number"] == 99
+    assert ctx["owner"] == "myorg"
+    assert ctx["repo"] == "myrepo"
+    assert ctx["title"] == "T"
+    assert ctx["body"] == "B"
+    assert ctx["author"] == "alice"
+    assert isinstance(ctx["labels"], list)
 
 
 # ---------------------------------------------------------------------------

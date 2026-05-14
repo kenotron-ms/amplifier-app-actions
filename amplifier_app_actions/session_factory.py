@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from amplifier_app_cli.session_runner import register_mention_handling
+from amplifier_app_cli.session_runner import register_session_spawning
 from amplifier_foundation import load_bundle
 
 _log = logging.getLogger(__name__)
@@ -106,91 +108,15 @@ async def create_session(
     prepared = await bundle.prepare()
     session = await prepared.create_session(session_cwd=session_cwd)
 
-    async def _spawn_fn(**kwargs: Any) -> Any:
-        """Shim between two callers and PreparedBundle.spawn().
-
-        The recipe executor calls:
-            spawn(agent_name="triage", instruction="...", parent_session=..., ...)
-
-        The delegate tool calls:
-            spawn(agent="foundation:explorer", instruction="...", context_depth="recent")
-
-        PreparedBundle.spawn() expects:
-            spawn(child_bundle: Bundle, instruction: str, *, parent_session=...)
-
-        Agent resolution:
-        - namespace:agent-path (e.g. "foundation:explorer",
-          "digital-twin-universe:dtu-profile-builder"):
-          Resolved via bundle.source_base_paths — the parent bundle maps each
-          loaded namespace to its local cache directory, so we construct the
-          path to the agent's .md file without a network round-trip.
-        - Direct URI (starts with "git+" or has "//" after the colon):
-          Passed verbatim to load_bundle() (git+https://, https://, file://).
-        - Local agent name (no ":" separator):
-          Reuse the parent bundle so the child session inherits the full tool
-          surface (github_post_comment, github_add_label, github_checkout_repo,
-          launch_dtu, tool-filesystem, tool-search, etc.).
-        """
-        from amplifier_foundation import load_bundle as _load_bundle  # noqa: PLC0415
-
-        # executor passes agent_name=; delegate tool passes agent=
-        agent_str: str = kwargs.get("agent_name") or kwargs.get("agent", "")
-        instruction: str = kwargs.get("instruction", "")
-
-        if not agent_str:
-            raise ValueError(
-                "session.spawn requires 'agent' or 'agent_name' — got: "
-                + repr(list(kwargs.keys()))
-            )
-
-        if ":" in agent_str or agent_str.startswith("git+"):
-            # Distinguish between proper URI schemes and namespace:agent-path references.
-            #
-            # Proper URIs have "//" immediately after the colon (https://, file://)
-            # or start with "git+" (git+https://).
-            #
-            # namespace:agent-path has a plain identifier before the colon, e.g.:
-            #   "foundation:explorer"
-            #   "digital-twin-universe:dtu-profile-builder"
-            #
-            colon_idx = agent_str.index(":")
-            after_colon = agent_str[colon_idx + 1 :]
-            is_uri = after_colon.startswith("//") or agent_str.startswith("git+")
-
-            if is_uri:
-                # Direct URI reference (git+https://, https://, file://, etc.)
-                child_bundle = await _load_bundle(agent_str)
-            else:
-                # namespace:agent-path — resolve the agent .md file via the parent
-                # bundle's source_base_paths, which maps every loaded namespace to its
-                # local cache directory.  This avoids re-cloning and works in
-                # network-free CI environments.
-                namespace = agent_str[:colon_idx]
-                agent_path = after_colon
-                ns_base = (
-                    bundle.source_base_paths.get(namespace)
-                    if bundle.source_base_paths
-                    else None
-                )
-                if ns_base is not None:
-                    agent_file = ns_base / "agents" / f"{agent_path}.md"
-                    child_bundle = await _load_bundle(str(agent_file))
-                else:
-                    # Namespace not in source_base_paths — fall back to a direct
-                    # load so the caller gets a descriptive error from the bundle loader.
-                    child_bundle = await _load_bundle(agent_str)
-        else:
-            # Local agent name — reuse the parent bundle so the child session
-            # inherits the full amplifier-app-actions tool surface.
-            child_bundle = bundle
-
-        return await prepared.spawn(
-            child_bundle,
-            instruction,
-            parent_session=session,
-        )
-
-    session.coordinator.register_capability("session.spawn", _spawn_fn)
+    # Wire up the standard CLI spawn + mention machinery.
+    # - register_mention_handling: wraps foundation's bundle resolver with app
+    #   shortcuts (@user:, @project:, @~/) for @-mention resolution.
+    # - register_session_spawning: registers session.spawn + session.resume using
+    #   spawn_sub_session(), which creates child sessions as config overlays on the
+    #   parent (not as separate bundle loads), so the parent's restricted tool
+    #   surface is inherited by all delegated agents — tool-gating is preserved.
+    register_mention_handling(session)
+    register_session_spawning(session)
 
     context_map = await _load_context_map()
     if context_map:

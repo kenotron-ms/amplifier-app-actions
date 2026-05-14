@@ -6,7 +6,29 @@ import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from amplifier_app_actions.session_factory import create_session
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _mock_cli_wiring(mocker=None):
+    """Patch CLI wiring functions for every test in this module.
+
+    register_mention_handling and register_session_spawning are external
+    dependencies (amplifier_app_cli).  Unit tests for session_factory.py
+    should not exercise real CLI internals — patch them everywhere.
+    """
+    with (
+        patch("amplifier_app_actions.session_factory.register_mention_handling"),
+        patch("amplifier_app_actions.session_factory.register_session_spawning"),
+    ):
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -96,17 +118,20 @@ async def test_create_session_does_not_mount_github_tools_programmatically():
 
 
 async def test_create_session_bundle_chain_and_spawn_without_tool_mounts():
-    """create_session() calls the bundle chain and registers session.spawn; no tool mounts.
+    """create_session() calls the bundle chain and wires standard CLI spawn; no tool mounts.
 
-    Consolidates what was previously checked by the two tool-mount tests.  The
-    bundle chain (load_bundle → prepare → create_session) must still run, and the
-    session.spawn capability must still be registered — those responsibilities
-    remain in session_factory.py.
+    The bundle chain (load_bundle → prepare → create_session) must still run, and
+    the standard CLI spawn machinery (register_mention_handling + register_session_spawning)
+    must be called so child sessions inherit the parent's restricted tool surface.
     """
     mock_bundle, mock_prepared, mock_session = _make_mock_chain()
     mock_load = AsyncMock(return_value=mock_bundle)
 
-    with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
+    with (
+        patch("amplifier_app_actions.session_factory.load_bundle", mock_load),
+        patch("amplifier_app_actions.session_factory.register_mention_handling") as mock_mention,
+        patch("amplifier_app_actions.session_factory.register_session_spawning") as mock_spawn,
+    ):
         result = await create_session(Path("/some/bundle"), github_token="test-token")
 
     # Bundle chain was invoked
@@ -114,11 +139,9 @@ async def test_create_session_bundle_chain_and_spawn_without_tool_mounts():
     mock_bundle.prepare.assert_called_once()
     mock_prepared.create_session.assert_called_once()
 
-    # session.spawn capability is registered
-    mock_session.coordinator.register_capability.assert_called_once()
-    args, _ = mock_session.coordinator.register_capability.call_args
-    assert args[0] == "session.spawn"
-    assert callable(args[1])
+    # Standard CLI machinery wired up
+    mock_mention.assert_called_once_with(mock_session)
+    mock_spawn.assert_called_once_with(mock_session)
 
     # Result is the session object
     assert result is mock_session
@@ -128,17 +151,18 @@ async def test_create_session_bundle_chain_and_spawn_without_tool_mounts():
 
 
 async def test_create_session_registers_session_spawn_capability():
-    """create_session registers 'session.spawn' capability via coordinator.register_capability."""
+    """create_session delegates spawn registration to register_session_spawning."""
     mock_bundle, _, mock_session = _make_mock_chain()
     mock_load = AsyncMock(return_value=mock_bundle)
 
-    with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
+    with (
+        patch("amplifier_app_actions.session_factory.load_bundle", mock_load),
+        patch("amplifier_app_actions.session_factory.register_mention_handling"),
+        patch("amplifier_app_actions.session_factory.register_session_spawning") as mock_spawn,
+    ):
         await create_session(Path("/some/bundle"), github_token="test-token")
 
-    mock_session.coordinator.register_capability.assert_called_once()
-    args, _ = mock_session.coordinator.register_capability.call_args
-    assert args[0] == "session.spawn"
-    assert callable(args[1])
+    mock_spawn.assert_called_once_with(mock_session)
 
 
 # ---------------------------------------------------------------------------
@@ -276,161 +300,41 @@ async def test_create_session_does_not_set_env_when_token_is_empty(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# _spawn_fn shim tests
+# Spawn registration tests
+# (Behaviour of spawn_sub_session itself is tested in amplifier_app_cli's own
+#  test suite — session_factory.py's job is solely to call the right wiring
+#  functions from the standard CLI machinery.)
 # ---------------------------------------------------------------------------
 
 
-async def test_spawn_fn_resolves_namespace_agent_via_source_base_paths(tmp_path):
-    """_spawn_fn resolves namespace:agent-path via bundle.source_base_paths.
-
-    The delegate tool calls: spawn(agent="foundation:explorer", instruction="...", context_depth="recent")
-    _spawn_fn should look up 'foundation' in bundle.source_base_paths, then load
-    the agent .md file from {ns_base}/agents/explorer.md rather than passing the
-    raw string "foundation:explorer" to load_bundle (which fails — "foundation:" is
-    not a recognised URI scheme).
-    """
-    mock_bundle, mock_prepared, mock_session = _make_mock_chain()
-
-    # Provide a real Path for the foundation namespace cache directory.
-    foundation_base = tmp_path / "foundation-cache"
-    (foundation_base / "agents").mkdir(parents=True)
-    mock_bundle.source_base_paths = {"foundation": foundation_base}
-
-    mock_load = AsyncMock(return_value=mock_bundle)
-
-    with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
-        await create_session(Path("/some/bundle"), github_token="test-token")
-
-    # Extract the registered _spawn_fn
-    args, _ = mock_session.coordinator.register_capability.call_args
-    spawn_fn = args[1]
-
-    # Prepare a separate child bundle mock
-    mock_child_bundle = MagicMock()
-    mock_prepared.spawn.reset_mock()
-    mock_prepared.spawn.return_value = {"spawned": True}
-
-    mock_inner_load = AsyncMock(return_value=mock_child_bundle)
-
-    with patch("amplifier_foundation.load_bundle", mock_inner_load):
-        result = await spawn_fn(
-            agent="foundation:explorer",
-            instruction="investigate this issue",
-            context_depth="recent",
-        )
-
-    # Should load the agent .md file from the namespace's local cache path.
-    expected_agent_path = str(foundation_base / "agents" / "explorer.md")
-    mock_inner_load.assert_called_once_with(expected_agent_path)
-
-    # Should call prepared.spawn with the resolved child bundle.
-    mock_prepared.spawn.assert_called_once_with(
-        mock_child_bundle,
-        "investigate this issue",
-        parent_session=mock_session,
-    )
-    assert result == {"spawned": True}
-
-
-async def test_spawn_fn_dtu_profile_builder_resolves_via_source_base_paths(tmp_path):
-    """_spawn_fn resolves 'digital-twin-universe:dtu-profile-builder' correctly.
-
-    This is the regression test for the bug:
-        dtu-profile-builder delegation failed: No handler for URI: digital-twin-universe:dtu-profile-builder
-
-    Previously _spawn_fn passed "digital-twin-universe:dtu-profile-builder" directly to
-    load_bundle(), which tried to treat it as a URI.  The 'digital-twin-universe:' prefix
-    is not a recognised URI scheme, so load_bundle raised BundleNotFoundError.
-
-    The fix: detect namespace:agent-path format and resolve via source_base_paths.
-    """
-    mock_bundle, mock_prepared, mock_session = _make_mock_chain()
-
-    dtu_base = tmp_path / "dtu-cache"
-    (dtu_base / "agents").mkdir(parents=True)
-    mock_bundle.source_base_paths = {"digital-twin-universe": dtu_base}
-
-    mock_load = AsyncMock(return_value=mock_bundle)
-
-    with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
-        await create_session(Path("/some/bundle"), github_token="test-token")
-
-    args, _ = mock_session.coordinator.register_capability.call_args
-    spawn_fn = args[1]
-
-    mock_child_bundle = MagicMock()
-    mock_inner_load = AsyncMock(return_value=mock_child_bundle)
-
-    with patch("amplifier_foundation.load_bundle", mock_inner_load):
-        await spawn_fn(
-            agent="digital-twin-universe:dtu-profile-builder",
-            instruction="build a DTU profile",
-        )
-
-    expected = str(dtu_base / "agents" / "dtu-profile-builder.md")
-    mock_inner_load.assert_called_once_with(expected)
-
-
-async def test_spawn_fn_git_uri_still_loads_directly():
-    """_spawn_fn passes git+https:// URIs directly to load_bundle (no namespace lookup)."""
-    mock_bundle, mock_prepared, mock_session = _make_mock_chain()
-    mock_load = AsyncMock(return_value=mock_bundle)
-
-    with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
-        await create_session(Path("/some/bundle"), github_token="test-token")
-
-    args, _ = mock_session.coordinator.register_capability.call_args
-    spawn_fn = args[1]
-
-    mock_child_bundle = MagicMock()
-    mock_inner_load = AsyncMock(return_value=mock_child_bundle)
-
-    git_uri = "git+https://github.com/microsoft/amplifier-foundation@main"
-    with patch("amplifier_foundation.load_bundle", mock_inner_load):
-        await spawn_fn(agent=git_uri, instruction="use this bundle")
-
-    # Must be passed verbatim — no source_base_paths lookup for real URIs.
-    mock_inner_load.assert_called_once_with(git_uri)
-
-
-async def test_spawn_fn_namespace_not_in_source_base_paths_falls_back_to_direct_load():
-    """When namespace is absent from source_base_paths, fall back to direct load_bundle call."""
-    mock_bundle, mock_prepared, mock_session = _make_mock_chain()
-    mock_bundle.source_base_paths = {}  # empty — 'unknown-bundle' is not registered
-
-    mock_load = AsyncMock(return_value=mock_bundle)
-
-    with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
-        await create_session(Path("/some/bundle"), github_token="test-token")
-
-    args, _ = mock_session.coordinator.register_capability.call_args
-    spawn_fn = args[1]
-
-    mock_child_bundle = MagicMock()
-    mock_inner_load = AsyncMock(return_value=mock_child_bundle)
-
-    with patch("amplifier_foundation.load_bundle", mock_inner_load):
-        await spawn_fn(agent="unknown-bundle:some-agent", instruction="do something")
-
-    # Falls back to direct load — will surface a clear error from the bundle loader.
-    mock_inner_load.assert_called_once_with("unknown-bundle:some-agent")
-
-
-async def test_spawn_fn_raises_when_no_agent_provided():
-    """_spawn_fn raises ValueError if 'agent' is absent from kwargs."""
+async def test_create_session_calls_register_mention_handling():
+    """create_session delegates mention handling to register_mention_handling."""
     mock_bundle, _, mock_session = _make_mock_chain()
     mock_load = AsyncMock(return_value=mock_bundle)
 
-    with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
+    with (
+        patch("amplifier_app_actions.session_factory.load_bundle", mock_load),
+        patch("amplifier_app_actions.session_factory.register_mention_handling") as mock_mention,
+        patch("amplifier_app_actions.session_factory.register_session_spawning"),
+    ):
         await create_session(Path("/some/bundle"), github_token="test-token")
 
-    args, _ = mock_session.coordinator.register_capability.call_args
-    spawn_fn = args[1]
+    mock_mention.assert_called_once_with(mock_session)
 
-    import pytest
 
-    with pytest.raises(ValueError, match="session.spawn requires 'agent'"):
-        await spawn_fn(instruction="missing agent kwarg")
+async def test_create_session_calls_register_session_spawning():
+    """create_session delegates spawn wiring to register_session_spawning."""
+    mock_bundle, _, mock_session = _make_mock_chain()
+    mock_load = AsyncMock(return_value=mock_bundle)
+
+    with (
+        patch("amplifier_app_actions.session_factory.load_bundle", mock_load),
+        patch("amplifier_app_actions.session_factory.register_mention_handling"),
+        patch("amplifier_app_actions.session_factory.register_session_spawning") as mock_spawn,
+    ):
+        await create_session(Path("/some/bundle"), github_token="test-token")
+
+    mock_spawn.assert_called_once_with(mock_session)
 
 
 async def test_create_session_injects_context_map_from_env_path(tmp_path):

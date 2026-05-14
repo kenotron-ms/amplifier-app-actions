@@ -9,6 +9,7 @@ license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
     "amplifier-foundation",
+    "amplifier-app-cli",
     "httpx>=0.27",
 ]
 
@@ -26,6 +27,7 @@ package = true
 
 [tool.uv.sources]
 amplifier-foundation = { git = "https://github.com/microsoft/amplifier-foundation", branch = "main" }
+amplifier-app-cli = { git = "https://github.com/microsoft/amplifier-app-cli", branch = "main" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["amplifier_app_actions"]
