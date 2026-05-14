@@ -83,32 +83,30 @@ async def run(
         model=model,
     )
 
-    # 4. Dispatch based on instruction type
+    # 4. Build context prefix once — prepended to all modes
+    ctx_prefix = f"{format_context_block(event)}\n\n" if event is not None else ""
+
+    # 5. All modes use session.execute() so streaming UI hooks fire and
+    #    output is visible in the Actions log.
     if itype in (InstructionType.PROMPT, InstructionType.PROMPT_SOURCE):
-        if event is not None:
-            # Context block MUST come before user prompt
-            full_prompt = f"{format_context_block(event)}\n\n{content}"
-        else:
-            full_prompt = content
-        await session.execute(full_prompt)
+        await session.execute(f"{ctx_prefix}{content}")
 
     elif itype == InstructionType.RECIPE:
-        tools: dict[str, Any] = session.coordinator.get("tools") or {}
-        recipe_tool = tools.get("recipes")
-        if recipe_tool is None:
-            raise RuntimeError(
-                f"Recipe tool not mounted on coordinator. Available tools: {list(tools.keys())}"
-            )
-        await recipe_tool.execute({"operation": "execute", "recipe_path": content, "context": event})
+        # The LLM calls the recipes tool; streaming UI output flows through normally.
+        await session.execute(
+            f"{ctx_prefix}"
+            f"Execute the recipe at: {content}\n\n"
+            "Call the recipes tool with operation=execute and that recipe_path. "
+            "Pass the event context variables to the recipe context. "
+            "Run it directly — do not summarise or skip steps."
+        )
 
     elif itype == InstructionType.ATTRACTOR:
-        tools = session.coordinator.get("tools") or {}
-        attractor_tool = tools.get("attractors")
-        if attractor_tool is None:
-            raise RuntimeError(
-                f"Attractor tool not mounted on coordinator. Available tools: {list(tools.keys())}"
-            )
-        await attractor_tool.execute({"attractor_path": content, "context": event})
+        await session.execute(
+            f"{ctx_prefix}"
+            f"Execute the attractor at: {content}\n\n"
+            "Call the attractor tool to run it directly."
+        )
 
 
 def main() -> None:
