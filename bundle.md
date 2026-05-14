@@ -1,10 +1,32 @@
 ---
-name: amplifier-app-actions
-version: 0.1.0
+bundle:
+  name: amplifier-app-actions
+  version: 0.1.0
+
 includes:
-  - git+https://github.com/microsoft/amplifier-foundation@main
-  - git+https://github.com/microsoft/amplifier-bundle-recipes@main
+  # Foundation behaviors — only what's needed for CI issue triage
+  - bundle: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=behaviors/sessions.yaml
+  - bundle: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=behaviors/streaming-ui.yaml
+  - bundle: git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=behaviors/agents.yaml
+  # Recipes engine
+  - bundle: git+https://github.com/microsoft/amplifier-bundle-recipes@main
+  # DTU for issue reproduction
   - bundle: git+https://github.com/microsoft/amplifier-bundle-digital-twin-universe@main
+
+session:
+  raw: true
+  orchestrator:
+    module: loop-streaming
+    source: git+https://github.com/microsoft/amplifier-module-loop-streaming@main
+    config:
+      extended_thinking: true
+  context:
+    module: context-simple
+    source: git+https://github.com/microsoft/amplifier-module-context-simple@main
+    config:
+      max_tokens: 200000
+      compact_threshold: 0.8
+      auto_compact: true
 
 providers:
   - module: provider-anthropic
@@ -15,6 +37,10 @@ providers:
     source: git+https://github.com/microsoft/amplifier-module-provider-github-copilot@main
 
 tools:
+  # File reading and search — essential for code investigation, no bash or web
+  - module: tool-filesystem
+    source: git+https://github.com/microsoft/amplifier-module-tool-filesystem@main
+  # GitHub-specific tools for issue triage
   - module: tool-github-post-comment
   - module: tool-github-add-label
   - module: tool-github-checkout-repo

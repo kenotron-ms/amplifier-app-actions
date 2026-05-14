@@ -99,7 +99,33 @@ async def create_session(
     session = await prepared.create_session(session_cwd=session_cwd)
 
     async def _spawn_fn(**kwargs: Any) -> Any:
-        return await prepared.spawn(**kwargs)
+        """Shim between the delegate tool's spawn API and PreparedBundle.spawn().
+
+        The delegate tool calls:
+            spawn(agent="foundation:explorer", instruction="...", context_depth="recent")
+
+        PreparedBundle.spawn() expects:
+            spawn(child_bundle: Bundle, instruction: str, *, parent_session=...)
+
+        This shim resolves the agent string to a Bundle and drops kwargs that
+        prepared.spawn() does not understand.
+        """
+        from amplifier_foundation import load_bundle as _load_bundle  # noqa: PLC0415
+
+        agent_str: str = kwargs.get("agent", "")
+        instruction: str = kwargs.get("instruction", "")
+
+        if not agent_str:
+            raise ValueError(
+                "session.spawn requires 'agent' — got: " + repr(list(kwargs.keys()))
+            )
+
+        child_bundle = await _load_bundle(agent_str)
+        return await prepared.spawn(
+            child_bundle,
+            instruction,
+            parent_session=session,
+        )
 
     session.coordinator.register_capability("session.spawn", _spawn_fn)
 

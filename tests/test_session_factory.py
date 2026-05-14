@@ -221,6 +221,72 @@ async def test_no_provider_skips_bundle_providers_override():
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# _spawn_fn shim tests
+# ---------------------------------------------------------------------------
+
+
+async def test_spawn_fn_resolves_agent_string_and_calls_prepared_spawn():
+    """_spawn_fn resolves the 'agent' kwarg to a Bundle, then calls
+    prepared.spawn(child_bundle, instruction, parent_session=session).
+
+    The delegate tool calls: spawn(agent="foundation:explorer", instruction="...", context_depth="recent")
+    PreparedBundle.spawn() expects: spawn(child_bundle, instruction, *, parent_session=session)
+    """
+    mock_bundle, mock_prepared, mock_session = _make_mock_chain()
+    mock_load = AsyncMock(return_value=mock_bundle)
+
+    with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
+        await create_session(Path("/some/bundle"), github_token="test-token")
+
+    # Extract the registered _spawn_fn
+    args, _ = mock_session.coordinator.register_capability.call_args
+    spawn_fn = args[1]
+
+    # Prepare a separate child bundle mock
+    mock_child_bundle = MagicMock()
+    mock_prepared.spawn.reset_mock()
+    mock_prepared.spawn.return_value = {"spawned": True}
+
+    # The inner load_bundle used inside _spawn_fn resolves the agent string
+    mock_inner_load = AsyncMock(return_value=mock_child_bundle)
+
+    with patch("amplifier_foundation.load_bundle", mock_inner_load):
+        result = await spawn_fn(
+            agent="foundation:explorer",
+            instruction="investigate this issue",
+            context_depth="recent",
+        )
+
+    # Should have resolved the agent string to a Bundle
+    mock_inner_load.assert_called_once_with("foundation:explorer")
+
+    # Should have called prepared.spawn with the right positional + keyword args
+    mock_prepared.spawn.assert_called_once_with(
+        mock_child_bundle,
+        "investigate this issue",
+        parent_session=mock_session,
+    )
+    assert result == {"spawned": True}
+
+
+async def test_spawn_fn_raises_when_no_agent_provided():
+    """_spawn_fn raises ValueError if 'agent' is absent from kwargs."""
+    mock_bundle, _, mock_session = _make_mock_chain()
+    mock_load = AsyncMock(return_value=mock_bundle)
+
+    with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
+        await create_session(Path("/some/bundle"), github_token="test-token")
+
+    args, _ = mock_session.coordinator.register_capability.call_args
+    spawn_fn = args[1]
+
+    import pytest
+
+    with pytest.raises(ValueError, match="session.spawn requires 'agent'"):
+        await spawn_fn(instruction="missing agent kwarg")
+
+
 async def test_create_session_injects_context_map_from_env_path(tmp_path):
     """TRIAGE_CONTEXT_MAP_PATH env var causes context map file to be injected into session config."""
     # Create a workspace map file
