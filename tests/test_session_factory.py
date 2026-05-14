@@ -217,6 +217,95 @@ async def test_no_provider_skips_bundle_providers_override():
 
 
 # ---------------------------------------------------------------------------
+# Bundle tools injection tests
+# ---------------------------------------------------------------------------
+
+
+async def test_create_session_injects_github_tools_into_bundle_tools_before_prepare():
+    """create_session() adds 4 GitHub tool entries to bundle.tools before prepare() is called.
+
+    The tools are injected programmatically so that the bundle system discovers
+    and mounts them without relying on pyproject.toml entry points.
+    """
+    mock_bundle, mock_prepared, _ = _make_mock_chain()
+    mock_load = AsyncMock(return_value=mock_bundle)
+
+    # Start with no tools list so we can observe it being built
+    mock_bundle.tools = None
+
+    tools_at_prepare_time: list = []
+
+    async def _capture_prepare():
+        # Snapshot bundle.tools at the moment prepare() is called
+        tools_at_prepare_time.extend(mock_bundle.tools or [])
+        return mock_prepared
+
+    mock_bundle.prepare = AsyncMock(side_effect=_capture_prepare)
+
+    with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
+        await create_session(Path("/some/bundle"), github_token="test-token")
+
+    module_names = [t.get("module") for t in tools_at_prepare_time]
+    assert "tool-github-post-comment" in module_names
+    assert "tool-github-add-label" in module_names
+    assert "tool-github-checkout-repo" in module_names
+    assert "tool-launch-dtu" in module_names
+
+
+async def test_create_session_github_tools_have_source_paths():
+    """Each injected GitHub tool entry has a 'source' key pointing to a directory."""
+    mock_bundle, mock_prepared, _ = _make_mock_chain()
+    mock_load = AsyncMock(return_value=mock_bundle)
+    mock_bundle.tools = None
+
+    tools_at_prepare_time: list = []
+
+    async def _capture_prepare():
+        tools_at_prepare_time.extend(mock_bundle.tools or [])
+        return mock_prepared
+
+    mock_bundle.prepare = AsyncMock(side_effect=_capture_prepare)
+
+    with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
+        await create_session(Path("/some/bundle"), github_token="test-token")
+
+    for entry in tools_at_prepare_time:
+        assert "source" in entry, f"Tool entry missing 'source': {entry}"
+        from pathlib import Path as _Path
+
+        assert _Path(entry["source"]).is_dir(), (
+            f"Tool source path does not exist or is not a directory: {entry['source']}"
+        )
+
+
+async def test_create_session_does_not_duplicate_tools_already_in_bundle():
+    """If bundle.tools already contains a GitHub tool, it is not added again."""
+    mock_bundle, mock_prepared, _ = _make_mock_chain()
+    mock_load = AsyncMock(return_value=mock_bundle)
+
+    # Pre-populate with one of the tools
+    mock_bundle.tools = [{"module": "tool-github-post-comment", "source": "/some/path"}]
+
+    tools_at_prepare_time: list = []
+
+    async def _capture_prepare():
+        tools_at_prepare_time.extend(mock_bundle.tools or [])
+        return mock_prepared
+
+    mock_bundle.prepare = AsyncMock(side_effect=_capture_prepare)
+
+    with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
+        await create_session(Path("/some/bundle"), github_token="test-token")
+
+    post_comment_entries = [
+        t
+        for t in tools_at_prepare_time
+        if t.get("module") == "tool-github-post-comment"
+    ]
+    assert len(post_comment_entries) == 1, "tool-github-post-comment was duplicated"
+
+
+# ---------------------------------------------------------------------------
 # Context map injection tests
 # ---------------------------------------------------------------------------
 

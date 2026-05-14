@@ -8,7 +8,10 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import amplifier_app_actions.tools as _tools_pkg
 from amplifier_foundation import load_bundle
+
+_TOOLS_DIR = Path(_tools_pkg.__file__).parent
 
 _log = logging.getLogger(__name__)
 
@@ -54,9 +57,9 @@ async def create_session(
     """Load bundle, prepare it, create a session, and register spawn.
 
     GitHub tools (github_post_comment, github_add_label, github_checkout_repo,
-    launch_dtu) are now declared as entry points in pyproject.toml and listed in
-    bundle.md.  The bundle loader mounts them during session.initialize(), so they
-    propagate automatically to all child sessions spawned via session.spawn.
+    launch_dtu) are injected into bundle.tools before prepare() so the bundle
+    loader mounts them during session.initialize().  They propagate automatically
+    to all child sessions spawned via session.spawn without needing entry points.
 
     Args:
         bundle_path: Path to the bundle to load.
@@ -94,6 +97,27 @@ async def create_session(
             cfg["model"] = model
             entry["config"] = cfg
         bundle.providers = [entry]
+
+    # Add GitHub tools to the bundle mount plan BEFORE prepare()
+    # This ensures they propagate to all child sessions (recipe sub-agents, etc.)
+    _GITHUB_TOOLS = [
+        "github_post_comment",
+        "github_add_label",
+        "github_checkout_repo",
+        "launch_dtu",
+    ]
+    if bundle.tools is None:
+        bundle.tools = []
+    for tool_name in _GITHUB_TOOLS:
+        module_name = f"tool-{tool_name.replace('_', '-')}"
+        # Only add if not already in the list
+        if not any(t.get("module") == module_name for t in bundle.tools):
+            bundle.tools.append(
+                {
+                    "module": module_name,
+                    "source": str(_TOOLS_DIR / tool_name),
+                }
+            )
 
     prepared = await bundle.prepare()
     session = await prepared.create_session(session_cwd=session_cwd)
