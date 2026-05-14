@@ -11,6 +11,8 @@ import argparse
 import asyncio
 import logging
 import os
+import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +25,36 @@ from amplifier_app_actions.session_factory import create_session
 logger = logging.getLogger(__name__)
 
 _BUNDLE_MD = Path(__file__).parent.parent / "bundle.md"
+
+# Matches Jinja2-style {{ var.path }} placeholders — with or without surrounding
+# whitespace — and strips the spaces so the recipes engine's regex
+# r"\{\{(\w+(?:\.\w+)*)\}\}" (which requires no spaces) can match them.
+_JINJA_SPACE_RE = re.compile(r"\{\{\s*([\w]+(?:\.[\w]+)*)\s*\}\}")
+
+
+def _normalize_recipe_path(recipe_path: str) -> tuple[str, tempfile.NamedTemporaryFile | None]:  # type: ignore[type-arg]
+    """Return a recipe path whose {{ var }} placeholders have no surrounding spaces.
+
+    The recipes executor's substitution regex ``\\{\\{(\\w+(?:\\.\\w+)*)\\}\\}``
+    requires no whitespace between ``{{`` and the variable name.  Recipe YAML
+    files typically follow the Jinja2 convention ``{{ var }}`` (with spaces),
+    so this function rewrites them to ``{{var}}`` in a temp file.
+
+    Returns ``(path, tmp)`` where *tmp* is a NamedTemporaryFile that must be
+    kept alive until the recipe finishes (or ``None`` if no rewriting was
+    needed).
+    """
+    content = Path(recipe_path).read_text(encoding="utf-8")
+    normalized = _JINJA_SPACE_RE.sub(r"{{\1}}", content)
+    if normalized == content:
+        return recipe_path, None  # nothing changed — use original
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False, encoding="utf-8"
+    )
+    tmp.write(normalized)
+    tmp.flush()
+    logger.debug("Normalized recipe written to %s", tmp.name)
+    return tmp.name, tmp
 
 
 async def run(
@@ -130,9 +162,18 @@ async def run(
                 f"Recipes tool not mounted on coordinator. "
                 f"Available tools: {sorted(tools.keys())}"
             )
-        await recipe_tool.execute(
-            {"operation": "execute", "recipe_path": content, "context": recipe_context}
-        )
+        # The recipes executor's substitution regex r"\{\{(\w+(?:\.\w+)*)\}\}"
+        # requires NO whitespace between {{ and the variable name.  Recipe YAML
+        # files typically follow the Jinja2 convention "{{ var }}" (with spaces)
+        # so we normalise the file to "{{var}}" in a temp copy first.
+        recipe_path, _tmp = _normalize_recipe_path(content)
+        try:
+            await recipe_tool.execute(
+                {"operation": "execute", "recipe_path": recipe_path, "context": recipe_context}
+            )
+        finally:
+            if _tmp is not None:
+                Path(_tmp.name).unlink(missing_ok=True)
 
     elif itype == InstructionType.ATTRACTOR:
         await session.execute(
