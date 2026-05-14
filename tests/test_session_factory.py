@@ -217,6 +217,60 @@ async def test_no_provider_skips_bundle_providers_override():
 
 
 # ---------------------------------------------------------------------------
+# Token environment injection tests
+# ---------------------------------------------------------------------------
+
+
+async def test_create_session_injects_github_token_into_env_when_missing(monkeypatch):
+    """create_session() sets GITHUB_TOKEN in os.environ when it is absent.
+
+    This is the regression test for the 'Illegal header value b'Bearer ''
+    bug: the github_token arg was accepted by create_session() but silently
+    dropped, so tools that call os.environ.get('GITHUB_TOKEN') got '' and
+    produced a bare 'Bearer ' header when running outside GitHub Actions.
+    """
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    mock_bundle, _, _ = _make_mock_chain()
+    mock_load = AsyncMock(return_value=mock_bundle)
+
+    with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
+        await create_session(Path("/some/bundle"), github_token="ghp_testtoken123")
+
+    assert os.environ.get("GITHUB_TOKEN") == "ghp_testtoken123"
+
+
+async def test_create_session_does_not_overwrite_existing_github_token(monkeypatch):
+    """create_session() does not replace GITHUB_TOKEN when it is already set.
+
+    In GitHub Actions the runner sets GITHUB_TOKEN automatically; the
+    github_token arg should not override it (setdefault semantics).
+    """
+    monkeypatch.setenv("GITHUB_TOKEN", "existing-runner-token")
+
+    mock_bundle, _, _ = _make_mock_chain()
+    mock_load = AsyncMock(return_value=mock_bundle)
+
+    with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
+        await create_session(Path("/some/bundle"), github_token="different-token")
+
+    assert os.environ.get("GITHUB_TOKEN") == "existing-runner-token"
+
+
+async def test_create_session_does_not_set_env_when_token_is_empty(monkeypatch):
+    """create_session() does not set GITHUB_TOKEN when github_token='' is given."""
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    mock_bundle, _, _ = _make_mock_chain()
+    mock_load = AsyncMock(return_value=mock_bundle)
+
+    with patch("amplifier_app_actions.session_factory.load_bundle", mock_load):
+        await create_session(Path("/some/bundle"), github_token="")
+
+    assert os.environ.get("GITHUB_TOKEN") is None
+
+
+# ---------------------------------------------------------------------------
 # Context map injection tests
 # ---------------------------------------------------------------------------
 

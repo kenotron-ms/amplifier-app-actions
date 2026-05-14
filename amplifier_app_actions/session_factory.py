@@ -75,6 +75,14 @@ async def create_session(
     if session_cwd is None:
         session_cwd = Path.cwd()
 
+    # Propagate the token into the environment so GitHub tools can read it via
+    # os.environ.get("GITHUB_TOKEN").  Tools are mounted by the bundle loader
+    # and read credentials from the environment at call time; the github_token
+    # argument never reaches them otherwise.  setdefault avoids overwriting a
+    # token that was already set (e.g. by the GitHub Actions runner itself).
+    if github_token:
+        os.environ.setdefault("GITHUB_TOKEN", github_token)
+
     bundle = await load_bundle(str(bundle_path))
 
     # Apply provider/model overrides before prepare() compiles the mount plan.
