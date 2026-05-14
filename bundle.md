@@ -16,13 +16,9 @@ providers:
 
 tools:
   - module: tool-github-post-comment
-    source: git+https://github.com/kenotron-ms/amplifier-app-actions@main#subdirectory=amplifier_app_actions/tools/github_post_comment
   - module: tool-github-add-label
-    source: git+https://github.com/kenotron-ms/amplifier-app-actions@main#subdirectory=amplifier_app_actions/tools/github_add_label
   - module: tool-github-checkout-repo
-    source: git+https://github.com/kenotron-ms/amplifier-app-actions@main#subdirectory=amplifier_app_actions/tools/github_checkout_repo
   - module: tool-launch-dtu
-    source: git+https://github.com/kenotron-ms/amplifier-app-actions@main#subdirectory=amplifier_app_actions/tools/launch_dtu
 ---
 
 # amplifier-app-actions Bundle
