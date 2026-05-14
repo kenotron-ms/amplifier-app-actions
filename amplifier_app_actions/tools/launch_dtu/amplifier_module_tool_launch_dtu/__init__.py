@@ -220,9 +220,10 @@ class LaunchDTUTool:
 
         try:
             result = await spawn(
-                agent="digital-twin-universe:dtu-profile-builder",
+                agent_name="digital-twin-universe:dtu-profile-builder",
                 instruction=instruction,
-                context_depth="none",
+                parent_session=self.coordinator.session,
+                agent_configs=self.coordinator.config.get("agents", {}),
             )
             return ToolResult(
                 success=True,
@@ -268,8 +269,6 @@ class LaunchDTUTool:
                         "amplifier-digital-twin",
                         "launch",
                         profile_path,
-                        "--format",
-                        "json",
                     ],
                     capture_output=True,
                     text=True,
@@ -287,7 +286,7 @@ class LaunchDTUTool:
                     error={"returncode": exc.returncode, "stderr": safe_stderr},
                 )
 
-            instance_id = json.loads(launch_result.stdout)["instance_id"]
+            instance_id = str(json.loads(launch_result.stdout)["instance_id"])
 
             # 2. Exec each command
             for cmd in commands:
