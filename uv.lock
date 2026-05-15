@@ -10,6 +10,7 @@ dependencies = [
     { name = "amplifier-app-cli" },
     { name = "amplifier-foundation" },
     { name = "httpx" },
+    { name = "pyyaml" },
 ]
 
 [package.dev-dependencies]
@@ -24,6 +25,7 @@ requires-dist = [
     { name = "amplifier-app-cli", git = "https://github.com/microsoft/amplifier-app-cli?branch=main" },
     { name = "amplifier-foundation", git = "https://github.com/microsoft/amplifier-foundation?branch=main" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "pyyaml", specifier = ">=6.0" },
 ]
 
 [package.metadata.requires-dev]

@@ -11,7 +11,26 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import yaml
 from amplifier_core import ModuleCoordinator, ToolResult  # type: ignore[import]
+
+
+class _BlockDumper(yaml.Dumper):
+    """YAML dumper that uses block literal style for multi-line strings.
+
+    Single-line values use the default (plain) style; multi-line values use
+    the ``|`` block literal so newlines are preserved verbatim.  This keeps
+    shell commands readable and avoids the flow-scalar quoting that breaks
+    when Python code contains colons or double-quotes.
+    """
+
+
+def _block_str(dumper: yaml.Dumper, data: str) -> yaml.ScalarNode:
+    style = "|" if "\n" in data else None
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
+
+
+_BlockDumper.add_representer(str, _block_str)
 
 
 # ---------------------------------------------------------------------------
@@ -157,20 +176,22 @@ class LaunchDTUTool:
 
             setup_cmds.append(clone_cmd)
 
-        setup_cmds_yaml = "\n".join(f"  - {cmd}" for cmd in setup_cmds)
-        commands_yaml = "\n".join(f"  - {cmd}" for cmd in commands)
-
-        return (
-            "base_image: ubuntu:24.04\n"
-            "allow_external: true\n"
-            "env:\n"
-            "  passthrough:\n"
-            "    - GITHUB_TOKEN\n"
-            "    - ANTHROPIC_API_KEY\n"
-            "setup_cmds:\n"
-            f"{setup_cmds_yaml}\n"
-            "commands:\n"
-            f"{commands_yaml}\n"
+        profile: dict[str, Any] = {
+            "base_image": "ubuntu:24.04",
+            "allow_external": True,
+            "env": {"passthrough": ["GITHUB_TOKEN", "ANTHROPIC_API_KEY"]},
+            "setup_cmds": setup_cmds,
+            "commands": commands,
+        }
+        # _BlockDumper renders multi-line strings (e.g. inline Python scripts)
+        # as YAML block literals (|) so embedded colons and newlines don't
+        # break the profile parser.
+        return yaml.dump(
+            profile,
+            Dumper=_BlockDumper,
+            default_flow_style=False,
+            allow_unicode=True,
+            width=10_000,
         )
 
     async def _execute_with_goal(
