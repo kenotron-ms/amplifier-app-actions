@@ -15,13 +15,12 @@ dependencies = [
 ]
 
 [project.scripts]
-amplifier-triage = "amplifier_app_actions.cli:main"
+amplifier-triage = "amplifier_app_actions.wrapper:cli_main"
 
 [project.entry-points."amplifier.modules"]
 tool-github-post-comment  = "amplifier_app_actions.tools.github_post_comment:mount"
 tool-github-add-label     = "amplifier_app_actions.tools.github_add_label:mount"
 tool-github-checkout-repo = "amplifier_app_actions.tools.github_checkout_repo:mount"
-tool-launch-dtu           = "amplifier_app_actions.tools.launch_dtu:mount"
 
 [tool.uv]
 package = true

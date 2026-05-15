@@ -21,12 +21,12 @@ def _reload_main():
 
 
 # ---------------------------------------------------------------------------
-# 1. INPUT_PROMPT passed as prompt to cli.run with token and event_path
+# 1. INPUT_PROMPT passed as prompt to wrapper.run with token and event_path
 # ---------------------------------------------------------------------------
 
 
-def test_input_prompt_passed_as_prompt_to_cli_run(monkeypatch):
-    """main() reads INPUT_PROMPT and passes it as prompt to cli.run."""
+def test_input_prompt_passed_as_prompt_to_wrapper_run(monkeypatch):
+    """main() reads INPUT_PROMPT and passes it as prompt to wrapper.run."""
     monkeypatch.setenv("INPUT_PROMPT", "Please triage this issue")
     monkeypatch.setenv("INPUT_GITHUB_TOKEN", "ghp_testtoken")
     monkeypatch.setenv("GITHUB_EVENT_PATH", "/tmp/event.json")
@@ -35,9 +35,16 @@ def test_input_prompt_passed_as_prompt_to_cli_run(monkeypatch):
     monkeypatch.delenv("INPUT_ATTRACTOR_SOURCE", raising=False)
     monkeypatch.delenv("INPUT_PROVIDER", raising=False)
     monkeypatch.delenv("INPUT_MODEL", raising=False)
+    monkeypatch.delenv("INPUT_BUNDLE", raising=False)
+    monkeypatch.delenv("INPUT_ENABLE_REPRODUCTION", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
-    with patch("amplifier_app_actions.cli.run", new_callable=AsyncMock) as mock_run:
+    with (
+        patch(
+            "amplifier_app_actions.wrapper.run", new_callable=AsyncMock, return_value=0
+        ) as mock_run,
+        patch("sys.exit"),
+    ):
         mod = _reload_main()
         mod.main()
 
@@ -61,11 +68,18 @@ def test_input_recipe_source_passed_as_recipe_source(monkeypatch):
     monkeypatch.delenv("INPUT_ATTRACTOR_SOURCE", raising=False)
     monkeypatch.delenv("INPUT_PROVIDER", raising=False)
     monkeypatch.delenv("INPUT_MODEL", raising=False)
+    monkeypatch.delenv("INPUT_BUNDLE", raising=False)
+    monkeypatch.delenv("INPUT_ENABLE_REPRODUCTION", raising=False)
     monkeypatch.delenv("INPUT_GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
 
-    with patch("amplifier_app_actions.cli.run", new_callable=AsyncMock) as mock_run:
+    with (
+        patch(
+            "amplifier_app_actions.wrapper.run", new_callable=AsyncMock, return_value=0
+        ) as mock_run,
+        patch("sys.exit"),
+    ):
         mod = _reload_main()
         mod.main()
 
@@ -88,11 +102,18 @@ def test_input_provider_defaults_to_anthropic(monkeypatch):
     monkeypatch.delenv("INPUT_RECIPE_SOURCE", raising=False)
     monkeypatch.delenv("INPUT_ATTRACTOR_SOURCE", raising=False)
     monkeypatch.delenv("INPUT_MODEL", raising=False)
+    monkeypatch.delenv("INPUT_BUNDLE", raising=False)
+    monkeypatch.delenv("INPUT_ENABLE_REPRODUCTION", raising=False)
     monkeypatch.delenv("INPUT_GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
 
-    with patch("amplifier_app_actions.cli.run", new_callable=AsyncMock) as mock_run:
+    with (
+        patch(
+            "amplifier_app_actions.wrapper.run", new_callable=AsyncMock, return_value=0
+        ) as mock_run,
+        patch("sys.exit"),
+    ):
         mod = _reload_main()
         mod.main()
 
@@ -115,9 +136,16 @@ def test_all_instruction_fields_forwarded_including_attractor_source(monkeypatch
     monkeypatch.delenv("INPUT_PROMPT", raising=False)
     monkeypatch.delenv("INPUT_PROMPT_SOURCE", raising=False)
     monkeypatch.delenv("INPUT_RECIPE_SOURCE", raising=False)
+    monkeypatch.delenv("INPUT_BUNDLE", raising=False)
+    monkeypatch.delenv("INPUT_ENABLE_REPRODUCTION", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
-    with patch("amplifier_app_actions.cli.run", new_callable=AsyncMock) as mock_run:
+    with (
+        patch(
+            "amplifier_app_actions.wrapper.run", new_callable=AsyncMock, return_value=0
+        ) as mock_run,
+        patch("sys.exit"),
+    ):
         mod = _reload_main()
         mod.main()
 
@@ -131,3 +159,125 @@ def test_all_instruction_fields_forwarded_including_attractor_source(monkeypatch
     assert kwargs["model"] == "gpt-4o"
     assert kwargs["github_token"] == "ghp_abc"
     assert kwargs["event_path"] == "/event.json"
+
+
+# ---------------------------------------------------------------------------
+# 5. INPUT_BUNDLE and INPUT_ENABLE_REPRODUCTION forwarded
+# ---------------------------------------------------------------------------
+
+
+def test_input_bundle_forwarded(monkeypatch):
+    """main() reads INPUT_BUNDLE and passes it as bundle to wrapper.run."""
+    monkeypatch.setenv("INPUT_PROMPT", "test")
+    monkeypatch.setenv("INPUT_BUNDLE", "triage-repro")
+    monkeypatch.delenv("INPUT_PROMPT_SOURCE", raising=False)
+    monkeypatch.delenv("INPUT_RECIPE_SOURCE", raising=False)
+    monkeypatch.delenv("INPUT_ATTRACTOR_SOURCE", raising=False)
+    monkeypatch.delenv("INPUT_PROVIDER", raising=False)
+    monkeypatch.delenv("INPUT_MODEL", raising=False)
+    monkeypatch.delenv("INPUT_ENABLE_REPRODUCTION", raising=False)
+    monkeypatch.delenv("INPUT_GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
+
+    with (
+        patch(
+            "amplifier_app_actions.wrapper.run", new_callable=AsyncMock, return_value=0
+        ) as mock_run,
+        patch("sys.exit"),
+    ):
+        mod = _reload_main()
+        mod.main()
+
+    kwargs = mock_run.call_args.kwargs
+    assert kwargs["bundle"] == "triage-repro"
+
+
+def test_input_enable_reproduction_true_forwarded(monkeypatch):
+    """main() reads INPUT_ENABLE_REPRODUCTION='true' and passes enable_reproduction=True."""
+    monkeypatch.setenv("INPUT_PROMPT", "test")
+    monkeypatch.setenv("INPUT_ENABLE_REPRODUCTION", "true")
+    monkeypatch.delenv("INPUT_PROMPT_SOURCE", raising=False)
+    monkeypatch.delenv("INPUT_RECIPE_SOURCE", raising=False)
+    monkeypatch.delenv("INPUT_ATTRACTOR_SOURCE", raising=False)
+    monkeypatch.delenv("INPUT_PROVIDER", raising=False)
+    monkeypatch.delenv("INPUT_MODEL", raising=False)
+    monkeypatch.delenv("INPUT_BUNDLE", raising=False)
+    monkeypatch.delenv("INPUT_GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
+
+    with (
+        patch(
+            "amplifier_app_actions.wrapper.run", new_callable=AsyncMock, return_value=0
+        ) as mock_run,
+        patch("sys.exit"),
+    ):
+        mod = _reload_main()
+        mod.main()
+
+    kwargs = mock_run.call_args.kwargs
+    assert kwargs["enable_reproduction"] is True
+
+
+def test_input_enable_reproduction_false_by_default(monkeypatch):
+    """main() passes enable_reproduction=False when INPUT_ENABLE_REPRODUCTION is not set."""
+    monkeypatch.setenv("INPUT_PROMPT", "test")
+    monkeypatch.delenv("INPUT_ENABLE_REPRODUCTION", raising=False)
+    monkeypatch.delenv("INPUT_PROMPT_SOURCE", raising=False)
+    monkeypatch.delenv("INPUT_RECIPE_SOURCE", raising=False)
+    monkeypatch.delenv("INPUT_ATTRACTOR_SOURCE", raising=False)
+    monkeypatch.delenv("INPUT_PROVIDER", raising=False)
+    monkeypatch.delenv("INPUT_MODEL", raising=False)
+    monkeypatch.delenv("INPUT_BUNDLE", raising=False)
+    monkeypatch.delenv("INPUT_GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
+
+    with (
+        patch(
+            "amplifier_app_actions.wrapper.run", new_callable=AsyncMock, return_value=0
+        ) as mock_run,
+        patch("sys.exit"),
+    ):
+        mod = _reload_main()
+        mod.main()
+
+    kwargs = mock_run.call_args.kwargs
+    assert kwargs["enable_reproduction"] is False
+
+
+# ---------------------------------------------------------------------------
+# 6. main() calls sys.exit with the return code from wrapper.run
+# ---------------------------------------------------------------------------
+
+
+def test_main_exits_with_wrapper_return_code(monkeypatch):
+    """main() calls sys.exit with the return code from wrapper.run."""
+    monkeypatch.setenv("INPUT_PROMPT", "test")
+    monkeypatch.delenv("INPUT_PROMPT_SOURCE", raising=False)
+    monkeypatch.delenv("INPUT_RECIPE_SOURCE", raising=False)
+    monkeypatch.delenv("INPUT_ATTRACTOR_SOURCE", raising=False)
+    monkeypatch.delenv("INPUT_PROVIDER", raising=False)
+    monkeypatch.delenv("INPUT_MODEL", raising=False)
+    monkeypatch.delenv("INPUT_BUNDLE", raising=False)
+    monkeypatch.delenv("INPUT_ENABLE_REPRODUCTION", raising=False)
+    monkeypatch.delenv("INPUT_GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
+
+    exit_codes = []
+
+    def capture_exit(code):
+        exit_codes.append(code)
+
+    with (
+        patch(
+            "amplifier_app_actions.wrapper.run", new_callable=AsyncMock, return_value=3
+        ),
+        patch("sys.exit", side_effect=capture_exit),
+    ):
+        mod = _reload_main()
+        mod.main()
+
+    assert exit_codes == [3]

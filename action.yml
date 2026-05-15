@@ -27,6 +27,15 @@ inputs:
     description: 'Model name override (leave empty to use provider default)'
     required: false
     default: ''
+  bundle:
+    description: >-
+      Bundle to use for the Amplifier session. Built-in aliases:
+        triage-safe      — foundation + 3 GitHub tools (default)
+        triage-repro     — triage-safe + digital-twin-universe (Incus/DTU)
+        triage-amplifier — triage-repro + Amplifier-dev tooling
+      Or pass any local path or git+https:// URL.
+    required: false
+    default: 'triage-safe'
   github_token:
     description: 'GitHub token for API calls (defaults to GITHUB_TOKEN)'
     required: false
@@ -34,6 +43,8 @@ inputs:
   enable_reproduction:
     description: >-
       Install Incus on the runner for container-based reproduction environments.
+      When true and bundle is 'triage-safe' (the default), automatically upgrades
+      to 'triage-repro' which includes digital-twin-universe for DTU support.
       Requires ubuntu-latest full VM runner (not container-based). Ubuntu 24.04
       ships Incus 6.0.0 which has an AppArmor bug blocking dockerd; this step
       installs from the Zabbly stable channel instead.
@@ -79,5 +90,7 @@ runs:
         INPUT_ATTRACTOR_SOURCE: ${{ inputs.attractor_source }}
         INPUT_PROVIDER: ${{ inputs.provider }}
         INPUT_MODEL: ${{ inputs.model }}
+        INPUT_BUNDLE: ${{ inputs.bundle }}
         INPUT_GITHUB_TOKEN: ${{ inputs.github_token }}
+        INPUT_ENABLE_REPRODUCTION: ${{ inputs.enable_reproduction }}
       run: uv run --project ${{ github.action_path }} python ${{ github.action_path }}/main.py

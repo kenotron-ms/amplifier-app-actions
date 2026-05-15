@@ -37,6 +37,7 @@ def test_input_schema_requires_owner_and_repo_not_ref():
 
 async def test_git_clone_called_with_correct_args(monkeypatch):
     """execute() runs git clone --depth 1 --filter=blob:none with correct URL and dest."""
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)  # ensure no token in URL
     tool = GitHubCheckoutRepoTool({})
     captured: list[list[str]] = []
 

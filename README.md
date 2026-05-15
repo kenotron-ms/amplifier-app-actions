@@ -108,28 +108,11 @@ For runs more involved than a single prompt, point the action at a recipe or att
 - **`recipe_source`** — a multi-step Amplifier recipe YAML. The action loads the recipe and runs it against the event context. Requires `actions/checkout` to be present when the source is a local path. Staged (approval-gated) recipes are not supported in CI and will fail with a clear error.
 - **`attractor_source`** — a Graphviz `.dot` attractor file describing the shape of the desired outcome. The action loads it as additional context for the agent, useful for steering recipes or prompts toward a known-good structure.
 
-### Writing recipes — template variables
+### Recipe Context Variables
 
-Recipe step prompts are Jinja2 templates. Two variable namespaces are always
-available:
+Recipe step prompts support Jinja2 templating. Context variables from the GitHub event are passed to the recipe runner via the standard `recipes` tool `context` argument. Refer to the [Amplifier recipes documentation](https://github.com/microsoft/amplifier-bundle-recipes) for the full list of template variables and step-output variable patterns.
 
-**`{{ context.* }}`** — GitHub event fields injected before the recipe runs:
-
-| Variable | Description |
-|---|---|
-| `{{ context.number }}` | Issue or PR number |
-| `{{ context.owner }}` | Repository owner login |
-| `{{ context.repo }}` | Repository name |
-| `{{ context.title }}` | Issue or PR title |
-| `{{ context.body }}` | Issue or PR body text |
-| `{{ context.author }}` | Login of the user who opened the issue or PR |
-| `{{ context.labels }}` | List of label names (e.g. `["bug", "high-priority"]`) |
-| `{{ context.event_type }}` | `"issues"` or `"pull_request"` |
-| `{{ context.base_ref }}` | Base branch — PR events only |
-| `{{ context.head_ref }}` | Head branch — PR events only |
-
-**`{{ step_id.* }}`** — outputs from earlier steps with `parse_json: true`.
-Each field in the step's JSON response is addressable by name:
+Example recipe:
 
 ```yaml
 steps:
@@ -149,9 +132,7 @@ steps:
       Repos:   {{ understand.affected_repos }}
 ```
 
-For the full variable reference including the five-stage investigation recipe
-pattern (`understand → clone → investigate → reproduce → report`), see
-[`docs/recipe-variables.md`](docs/recipe-variables.md).
+Context variables like `context.number`, `context.owner`, `context.title`, `context.body`, etc. are automatically injected into the recipe context by the action before execution.
 
 ## Local testing
 

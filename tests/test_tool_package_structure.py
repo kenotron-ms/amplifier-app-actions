@@ -13,7 +13,6 @@ _TOOL_MODULES = [
     "amplifier_app_actions.tools.github_post_comment",
     "amplifier_app_actions.tools.github_add_label",
     "amplifier_app_actions.tools.github_checkout_repo",
-    "amplifier_app_actions.tools.launch_dtu",
 ]
 
 
