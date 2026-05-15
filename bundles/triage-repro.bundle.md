@@ -9,6 +9,9 @@ includes:
   - bundle: ./bundles/triage-safe.bundle.md
   # Add DTU infrastructure — dtu-profile-builder agent, amplifier-digital-twin CLI
   - bundle: git+https://github.com/microsoft/amplifier-bundle-digital-twin-universe@main
+  # Add Amplifier Tester — registers amplifier-tester: namespace (setup-digital-twin agent)
+  # Required by investigate-recipe.yaml reproduce step.
+  - bundle: git+https://github.com/microsoft/amplifier-bundle-amplifier-tester@main
 ---
 
 # triage-repro Bundle
