@@ -8,6 +8,9 @@ includes:
   # foundation:explorer, foundation:zen-architect, foundation:bug-hunter, etc.
   # are resolvable as delegate targets.
   - bundle: git+https://github.com/microsoft/amplifier-foundation@main
+  # Recipes tool — required for recipe execution via `amplifier tool invoke recipes`.
+  # Not included in foundation by default; must be explicit.
+  - bundle: git+https://github.com/microsoft/amplifier-bundle-recipes@main
   # Anthropic provider — foundation ships this pre-built; uses ANTHROPIC_API_KEY.
   - bundle: foundation:providers/anthropic-sonnet
 
