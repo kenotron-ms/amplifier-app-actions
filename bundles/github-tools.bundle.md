@@ -1,6 +1,6 @@
 ---
 bundle:
-  name: triage-safe
+  name: github-tools
   version: 0.1.0
 
 includes:
@@ -23,11 +23,10 @@ tools:
   - module: tool-github-checkout-repo
 ---
 
-# triage-safe Bundle
+# github-tools Bundle
 
-Default bundle for automated GitHub issue and PR triage workflows.
-
-Includes foundation (full namespace) plus the three GitHub interaction tools.
+Foundation + GitHub API interaction tools. The base bundle for all
+amplifier-app-actions workflows.
 
 ## Tools
 
@@ -39,6 +38,6 @@ Includes foundation (full namespace) plus the three GitHub interaction tools.
 
 ## Bundle Tiers
 
-- **triage-safe** (this bundle): automated triage, no DTU
-- **triage-repro**: adds `digital-twin-universe` for Incus/DTU issue reproduction
-- **triage-amplifier**: adds amplifier-dev tooling for Amplifier repo triaging
+- **github-tools** (this bundle): foundation + GitHub API tools
+- **github-tools-dtu**: adds `digital-twin-universe` for containerized execution
+- **github-tools-amplifier-dev**: adds Amplifier-ecosystem dev tooling

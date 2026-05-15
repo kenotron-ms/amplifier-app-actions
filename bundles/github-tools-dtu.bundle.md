@@ -1,12 +1,12 @@
 ---
 bundle:
-  name: triage-repro
+  name: github-tools-dtu
   version: 0.1.0
 
 includes:
-  # Compose the safe triage baseline.
+  # Compose the base tier.
   # Path is relative to the action root (wrapper.py sets cwd=action_path for the subprocess).
-  - bundle: ./bundles/triage-safe.bundle.md
+  - bundle: ./bundles/github-tools.bundle.md
   # Add DTU infrastructure — dtu-profile-builder agent, amplifier-digital-twin CLI
   - bundle: git+https://github.com/microsoft/amplifier-bundle-digital-twin-universe@main
   # Add Amplifier Tester — registers amplifier-tester: namespace (setup-digital-twin agent)
@@ -14,9 +14,10 @@ includes:
   - bundle: git+https://github.com/microsoft/amplifier-bundle-amplifier-tester@main
 ---
 
-# triage-repro Bundle
+# github-tools-dtu Bundle
 
-Extends `triage-safe` with Digital Twin Universe support for isolated issue reproduction.
+Extends `github-tools` with Digital Twin Universe support for isolated
+containerized execution.
 
 Use when `enable_reproduction: true` in the GitHub Actions workflow.
 

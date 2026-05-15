@@ -1,26 +1,19 @@
 ---
 bundle:
-  name: triage-amplifier
+  name: github-tools-amplifier-dev
   version: 0.1.0
 
 includes:
-  # Compose the repro tier (which includes safe + DTU)
-  - bundle: ./triage-repro.bundle.md
+  # Compose the DTU tier (which includes github-tools + DTU)
+  - bundle: ./github-tools-dtu.bundle.md
   # TODO: add amplifier-dev bundle when URL is stabilised
   # - bundle: git+https://github.com/microsoft/amplifier-bundle-amplifier-dev@main
 ---
 
-# triage-amplifier Bundle
+# github-tools-amplifier-dev Bundle
 
-Extends `triage-repro` with Amplifier-ecosystem tooling for triaging issues
-in the Amplifier monorepo itself.
-
-## Usage
-
-Point your workflow to this bundle when:
-- The issue is in an Amplifier core/foundation/module repo
-- You need `foundation:amplifier-expert` or similar specialist agents
-- Cross-repo amplifier module tracing is required
+Extends `github-tools-dtu` with Amplifier-ecosystem tooling for triaging
+issues in Amplifier core/foundation/module repositories.
 
 ## Future Extension
 
