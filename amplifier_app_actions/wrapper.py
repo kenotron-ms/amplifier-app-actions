@@ -57,15 +57,15 @@ def _normalize_recipe_path(recipe_path: str) -> tuple[str, Any]:
 
 
 _BUILT_IN_BUNDLES: frozenset[str] = frozenset(
-    {"triage-safe", "triage-repro", "triage-amplifier"}
+    {"github-tools", "github-tools-dtu", "github-tools-amplifier-dev"}
 )
-_DEFAULT_BUNDLE = "triage-safe"
+_DEFAULT_BUNDLE = "github-tools"
 
 
 def _resolve_bundle_path(bundle: str, action_path: Path) -> str:
     """Resolve a built-in bundle alias to an absolute path.
 
-    Built-in aliases (triage-safe, triage-repro, triage-amplifier) resolve
+    Built-in aliases (github-tools, github-tools-dtu, github-tools-amplifier-dev) resolve
     to ``action_path/bundles/<alias>.bundle.md``.  Any other value is returned
     unchanged so callers can pass arbitrary local or remote paths.
     """
@@ -105,7 +105,7 @@ async def run(
     model:
         Model name override.  Empty = use provider default.
     bundle:
-        Bundle alias ('triage-safe', 'triage-repro', 'triage-amplifier') or
+        Bundle alias ('github-tools', 'github-tools-dtu', 'github-tools-amplifier-dev') or
         any path/URL.  Aliases are resolved relative to action_path.
     github_token:
         GitHub token to inject into GITHUB_TOKEN env via setdefault.
@@ -113,8 +113,8 @@ async def run(
         Path to the GitHub event JSON file.  When it exists the event is
         parsed and a context block is prepended to the prompt.
     enable_reproduction:
-        When True and bundle is the default ('triage-safe'), upgrade to
-        'triage-repro' (which includes digital-twin-universe).
+        When True and bundle is the default ('github-tools'), upgrade to
+        'github-tools-dtu' (which includes digital-twin-universe).
     action_path:
         Repository root for resolving built-in bundle aliases.  Defaults to
         the parent directory of this package.
@@ -130,10 +130,10 @@ async def run(
     if action_path is None:
         action_path = Path(__file__).parent.parent
 
-    # Handle enable_reproduction: upgrade default bundle to triage-repro
+    # Handle enable_reproduction: upgrade default bundle to github-tools-dtu
     effective_bundle = bundle
     if enable_reproduction and bundle == _DEFAULT_BUNDLE:
-        effective_bundle = "triage-repro"
+        effective_bundle = "github-tools-dtu"
 
     # Resolve built-in bundle aliases to absolute paths
     bundle_path = _resolve_bundle_path(effective_bundle, action_path)
@@ -212,8 +212,36 @@ async def _run_prompt_or_attractor(
         argv += ["--model", model]
     argv += ["--mode", "single", "--", full_prompt]
 
-    proc = await asyncio.create_subprocess_exec(*argv, cwd=cwd)
-    await proc.wait()
+    # Pipe stderr so we can detect known false-positive exit codes while still
+    # streaming every line to sys.stderr in real time (GHA sees live output).
+    proc = await asyncio.create_subprocess_exec(
+        *argv, cwd=cwd, stderr=asyncio.subprocess.PIPE
+    )
+
+    # Keep only the tail of stderr for post-exit pattern matching (memory-efficient).
+    _stderr_tail: list[str] = []
+
+    async def _drain_stderr() -> None:
+        assert proc.stderr is not None
+        async for raw in proc.stderr:
+            line = raw.decode("utf-8", errors="replace")
+            sys.stderr.write(line)
+            sys.stderr.flush()
+            _stderr_tail.append(line)
+            if len(_stderr_tail) > 20:
+                _stderr_tail.pop(0)
+
+    await asyncio.gather(proc.wait(), _drain_stderr())
+
+    if proc.returncode:
+        # Known false positive: Amplifier CLI session cleanup error that fires
+        # after `--mode single` completes its work.  The agent finished, posted
+        # its output, and the session teardown then failed to find the already-
+        # cleaned-up session.  Treat this specific pattern as success.
+        tail = "".join(_stderr_tail)
+        if re.search(r"Session '[0-9a-f-]+' not found", tail):
+            return 0
+
     return proc.returncode or 0
 
 
@@ -253,7 +281,7 @@ async def _run_recipe(
     # no @file CLI support required.  See module docstring for rationale.
     context_json = json.dumps(recipe_context)
 
-    # Pass -b so recipe step agents inherit the correct bundle (e.g. triage-repro
+    # Pass -b so recipe step agents inherit the correct bundle (e.g. github-tools-dtu
     # for DTU availability) rather than the user's ambient default bundle.
     argv = [
         amplifier_bin,
