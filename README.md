@@ -254,31 +254,13 @@ This action is designed for private repositories. The agent's capability surface
 
 ## Issue reproduction (advanced)
 
-When an agent identifies a failure that is worth reproducing, it can call the `launch_dtu` tool to spin up an ephemeral, isolated Ubuntu container, clone one or more repositories at specific versions, run commands inside it, capture the output, and destroy the container — leaving no trace on the host.
+When `enable_reproduction: true` is set, the action uses `amplifier-tester:setup-digital-twin` to spin up an ephemeral, isolated Ubuntu container for reproduction. The agent:
+
+1. Mirrors the affected repos into a local Gitea instance using `amplifier-gitea mirror-from-github`
+2. Generates a DTU profile with `url_rewrites` pointing those repos at Gitea
+3. Launches the container, runs the reproduction script from the issue body, captures the output, and destroys the container — leaving no trace on the host
 
 This is useful for verifying that a bug exists at a reported version and is fixed in a newer one without touching the host system.
-
-### Guiding the agent to reproduce failures
-
-Add instructions to your prompt so the agent knows to reach for `launch_dtu` when it finds a failure:
-
-```
-If you identify a failure that is worth reproducing, use the launch_dtu tool.
-Specify the affected repository and the version from the issue description, e.g.
-repos: ["myorg/mylib@v1.4.2"]. Run the minimal commands needed to reproduce the
-failure and include the exact output in your comment.
-```
-
-### repo@ref format
-
-Each repository is passed as `owner/repo` or `owner/repo@ref`:
-
-| Format | Example | Behaviour |
-|--------|---------|-----------|
-| Tag | `myorg/mylib@v1.4.2` | Clones the tag via `--branch` |
-| Branch | `myorg/mylib@main` | Clones the branch via `--branch` |
-| SHA | `myorg/mylib@abc1234` | Full clone then `git checkout <sha>` |
-| HEAD | `myorg/mylib` | Clones the default branch (shallow) |
 
 ### Private repositories
 
@@ -327,7 +309,7 @@ jobs:
             2. Post a comment that acknowledges the issue, confirms its type, and briefly describes what happens next
 
             If the issue describes a crash or unexpected behaviour and includes version information,
-            use the launch_dtu tool to reproduce the failure. Include the exact output in your comment.
+            use the triage-repro bundle (enable_reproduction: true) to reproduce the failure in an isolated container.
 
             Be concise. Do not speculate about causes or promise timelines.
         env:

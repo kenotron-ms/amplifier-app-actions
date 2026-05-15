@@ -76,15 +76,9 @@ def test_triage_safe_has_all_three_github_tools():
     assert "tool-github-checkout-repo" in modules
 
 
-def test_triage_safe_no_launch_dtu():
-    """triage-safe.bundle.md must NOT declare tool-launch-dtu."""
-    fm = _parse_frontmatter(_BUNDLES_DIR / "triage-safe.bundle.md")
-    modules = _tool_modules(fm)
-    assert "tool-launch-dtu" not in modules
 
-
-def test_triage_safe_github_tools_have_local_sources():
-    """Each GitHub tool in triage-safe must have a local source: path."""
+def test_triage_safe_github_tools_use_entry_points():
+    """GitHub tools in triage-safe must NOT have a source: path (they use entry points)."""
     fm = _parse_frontmatter(_BUNDLES_DIR / "triage-safe.bundle.md")
     tools = {t.get("module", ""): t for t in (fm.get("tools") or [])}
     for name in [
@@ -92,21 +86,8 @@ def test_triage_safe_github_tools_have_local_sources():
         "tool-github-add-label",
         "tool-github-checkout-repo",
     ]:
-        assert "source" in tools.get(name, {}), f"{name} must have a local source: path"
-
-
-def test_triage_safe_github_tool_sources_reference_local_paths():
-    """GitHub tool source paths must reference the local amplifier_app_actions/tools/ directory."""
-    fm = _parse_frontmatter(_BUNDLES_DIR / "triage-safe.bundle.md")
-    tools_by_module = {t.get("module", ""): t for t in (fm.get("tools") or [])}
-    for name, tool_short in [
-        ("tool-github-post-comment", "github_post_comment"),
-        ("tool-github-add-label", "github_add_label"),
-        ("tool-github-checkout-repo", "github_checkout_repo"),
-    ]:
-        source = tools_by_module.get(name, {}).get("source", "")
-        assert tool_short in source, (
-            f"{name} source {source!r} must reference {tool_short}"
+        assert "source" not in tools.get(name, {}), (
+            f"{name} must not have a source: path — registered via pyproject.toml entry points"
         )
 
 
@@ -148,24 +129,6 @@ def test_triage_repro_includes_digital_twin_universe():
         "triage-repro must include digital-twin-universe"
     )
 
-
-def test_triage_repro_has_launch_dtu():
-    """triage-repro.bundle.md must declare tool-launch-dtu (GHA reproduction tool)."""
-    fm = _parse_frontmatter(_BUNDLES_DIR / "triage-repro.bundle.md")
-    modules = _tool_modules(fm)
-    assert "tool-launch-dtu" in modules, (
-        "triage-repro must include tool-launch-dtu for repo-cloning + DTU reproduction"
-    )
-
-
-def test_triage_repro_launch_dtu_has_local_source():
-    """triage-repro tool-launch-dtu must have a local source: path."""
-    fm = _parse_frontmatter(_BUNDLES_DIR / "triage-repro.bundle.md")
-    tools = {t.get("module", ""): t for t in (fm.get("tools") or [])}
-    assert "source" in tools.get("tool-launch-dtu", {}), (
-        "tool-launch-dtu must have a local source: path"
-    )
-    assert "launch_dtu" in tools["tool-launch-dtu"]["source"]
 
 
 def test_triage_repro_no_session_override():

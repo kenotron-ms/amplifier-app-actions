@@ -254,7 +254,7 @@ async def _run_recipe(
     context_json = json.dumps(recipe_context)
 
     # Pass -b so recipe step agents inherit the correct bundle (e.g. triage-repro
-    # for launch_dtu availability) rather than the user's ambient default bundle.
+    # for DTU availability) rather than the user's ambient default bundle.
     argv = [
         amplifier_bin,
         "tool",
