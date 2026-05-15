@@ -149,11 +149,23 @@ def test_triage_repro_includes_digital_twin_universe():
     )
 
 
-def test_triage_repro_no_launch_dtu():
-    """triage-repro.bundle.md must NOT declare tool-launch-dtu."""
+def test_triage_repro_has_launch_dtu():
+    """triage-repro.bundle.md must declare tool-launch-dtu (GHA reproduction tool)."""
     fm = _parse_frontmatter(_BUNDLES_DIR / "triage-repro.bundle.md")
     modules = _tool_modules(fm)
-    assert "tool-launch-dtu" not in modules
+    assert "tool-launch-dtu" in modules, (
+        "triage-repro must include tool-launch-dtu for repo-cloning + DTU reproduction"
+    )
+
+
+def test_triage_repro_launch_dtu_has_local_source():
+    """triage-repro tool-launch-dtu must have a local source: path."""
+    fm = _parse_frontmatter(_BUNDLES_DIR / "triage-repro.bundle.md")
+    tools = {t.get("module", ""): t for t in (fm.get("tools") or [])}
+    assert "source" in tools.get("tool-launch-dtu", {}), (
+        "tool-launch-dtu must have a local source: path"
+    )
+    assert "launch_dtu" in tools["tool-launch-dtu"]["source"]
 
 
 def test_triage_repro_no_session_override():

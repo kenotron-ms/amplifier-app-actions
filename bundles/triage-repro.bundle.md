@@ -6,10 +6,15 @@ bundle:
 includes:
   # Compose the safe triage baseline
   - bundle: ./triage-safe.bundle.md
-  # Add DTU (Incus + amplifier-tester) for isolated issue reproduction
-  # foundation already includes amplifier-tester; this adds launch_dtu and
-  # DTU-aware agents for spinning up containerised reproduction environments.
+  # Add DTU infrastructure — dtu-profile-builder agent, amplifier-digital-twin CLI
   - bundle: git+https://github.com/microsoft/amplifier-bundle-digital-twin-universe@main
+
+tools:
+  # GHA-specific reproduction tool: accepts repos (owner/repo@ref) + goal or commands,
+  # clones into an Incus container using GITHUB_TOKEN, runs commands, returns output.
+  # This is the primary tool for "clone relevant repos and run DTU validation in context".
+  - module: tool-launch-dtu
+    source: ../amplifier_app_actions/tools/launch_dtu
 ---
 
 # triage-repro Bundle
@@ -22,8 +27,10 @@ Requires an Ubuntu full-VM runner with Incus installed (see `action.yml`).
 
 ## Additional Capability
 
-- `launch_dtu` tool (from digital-twin-universe) for Incus container management
-- DTU-aware agents for reproductions inside isolated environments
+- `launch_dtu` tool — clone repos (by `owner/repo@ref`) into an Incus container using
+  `GITHUB_TOKEN`, then either run exact commands or delegate to `dtu-profile-builder`
+  for NL-driven reproduction. This is the primary tool for examining code in context.
+- `digital-twin-universe` agents (`dtu-profile-builder`, `validator`) for DTU orchestration
 - `amplifier-tester` (already included via foundation) for behaviour validation
 
 ## Incus Requirements
