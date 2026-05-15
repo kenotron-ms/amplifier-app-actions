@@ -212,14 +212,30 @@ async def _run_prompt_or_attractor(
         argv += ["--model", model]
     argv += ["--mode", "single", "--", full_prompt]
 
-    # Pipe stderr so we can detect known false-positive exit codes while still
-    # streaming every line to sys.stderr in real time (GHA sees live output).
+    # Pipe both stdout and stderr so we can detect known false-positive exit codes
+    # while still streaming every line in real time (GHA sees live output).
+    # The "Session not found" teardown error is emitted on stdout by the Amplifier
+    # CLI, so we must tail stdout — not just stderr — to suppress it correctly.
     proc = await asyncio.create_subprocess_exec(
-        *argv, cwd=cwd, stderr=asyncio.subprocess.PIPE
+        *argv,
+        cwd=cwd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
 
-    # Keep only the tail of stderr for post-exit pattern matching (memory-efficient).
+    # Keep only the tail of each stream for post-exit pattern matching.
+    _stdout_tail: list[str] = []
     _stderr_tail: list[str] = []
+
+    async def _drain_stdout() -> None:
+        assert proc.stdout is not None
+        async for raw in proc.stdout:
+            line = raw.decode("utf-8", errors="replace")
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            _stdout_tail.append(line)
+            if len(_stdout_tail) > 20:
+                _stdout_tail.pop(0)
 
     async def _drain_stderr() -> None:
         assert proc.stderr is not None
@@ -231,15 +247,16 @@ async def _run_prompt_or_attractor(
             if len(_stderr_tail) > 20:
                 _stderr_tail.pop(0)
 
-    await asyncio.gather(proc.wait(), _drain_stderr())
+    await asyncio.gather(proc.wait(), _drain_stdout(), _drain_stderr())
 
     if proc.returncode:
         # Known false positive: Amplifier CLI session cleanup error that fires
         # after `--mode single` completes its work.  The agent finished, posted
         # its output, and the session teardown then failed to find the already-
         # cleaned-up session.  Treat this specific pattern as success.
-        tail = "".join(_stderr_tail)
-        if re.search(r"Session '[0-9a-f-]+' not found", tail):
+        # Check both stdout and stderr — the CLI emits this on stdout.
+        combined_tail = "".join(_stdout_tail + _stderr_tail)
+        if re.search(r"Session '[0-9a-f-]+' not found", combined_tail):
             return 0
 
     return proc.returncode or 0
