@@ -18,12 +18,43 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from amplifier_app_actions.events import format_context_block, parse_event
 from amplifier_app_actions.instruction import InstructionType, resolve_instruction
+
+# Matches Jinja2-style {{ var.path }} placeholders — with or without surrounding
+# whitespace — and strips the spaces so the recipes engine's regex
+# r"\{\{(\w+(?:\.\w+)*)\}\}" (which requires no spaces) can match them.
+_JINJA_SPACE_RE = re.compile(r"\{\{\s*([\w]+(?:\.[\w]+)*)\s*\}\}")
+
+
+def _normalize_recipe_path(recipe_path: str) -> tuple[str, Any]:
+    """Return a recipe path whose {{var}} placeholders have no surrounding spaces.
+
+    The recipes executor's substitution regex ``\\{\\{(\\w+(?:\\.\\w+)*)\\}\\}``
+    requires no whitespace between ``{{`` and the variable name.  Recipe YAML
+    files typically follow the Jinja2 convention ``{{ var }}`` (with spaces),
+    so this function rewrites them to ``{{var}}`` in a temp file.
+
+    Returns ``(path, tmp)`` where *tmp* is a NamedTemporaryFile that must be
+    kept alive until the recipe finishes (or ``None`` if no rewriting was needed).
+    """
+    content = Path(recipe_path).read_text(encoding="utf-8")
+    normalized = _JINJA_SPACE_RE.sub(r"{{\1}}", content)
+    if normalized == content:
+        return recipe_path, None  # nothing changed — use original
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False, encoding="utf-8"
+    )
+    tmp.write(normalized)
+    tmp.flush()
+    return tmp.name, tmp
+
 
 _BUILT_IN_BUNDLES: frozenset[str] = frozenset(
     {"triage-safe", "triage-repro", "triage-amplifier"}
@@ -39,7 +70,7 @@ def _resolve_bundle_path(bundle: str, action_path: Path) -> str:
     unchanged so callers can pass arbitrary local or remote paths.
     """
     if bundle in _BUILT_IN_BUNDLES:
-        return str(action_path / "bundles" / f"{bundle}.bundle.md")
+        return "file://" + str(action_path / "bundles" / f"{bundle}.bundle.md")
     return bundle
 
 
@@ -126,6 +157,11 @@ async def run(
         event = parse_event(event_path)
         ctx_prefix = format_context_block(event) + "\n\n"
 
+    # Use action_path as the subprocess CWD so that relative paths inside
+    # bundle files (includes, tool sources) resolve from the action root,
+    # not from whatever directory the CLI was invoked from.
+    action_cwd = str(action_path)
+
     if itype == InstructionType.RECIPE:
         return await _run_recipe(
             content=content,
@@ -133,6 +169,7 @@ async def run(
             event_path=event_path,
             bundle_path=bundle_path,
             amplifier_bin=amplifier_bin,
+            cwd=action_cwd,
         )
     else:
         return await _run_prompt_or_attractor(
@@ -143,6 +180,7 @@ async def run(
             provider=provider,
             model=model,
             amplifier_bin=amplifier_bin,
+            cwd=action_cwd,
         )
 
 
@@ -154,6 +192,7 @@ async def _run_prompt_or_attractor(
     provider: str,
     model: str,
     amplifier_bin: str,
+    cwd: str | None = None,
 ) -> int:
     """Build and run: amplifier run --bundle <path> [--provider P] [--model M] --mode single -- <prompt>"""
     if itype == InstructionType.ATTRACTOR:
@@ -173,7 +212,7 @@ async def _run_prompt_or_attractor(
         argv += ["--model", model]
     argv += ["--mode", "single", "--", full_prompt]
 
-    proc = await asyncio.create_subprocess_exec(*argv)
+    proc = await asyncio.create_subprocess_exec(*argv, cwd=cwd)
     await proc.wait()
     return proc.returncode or 0
 
@@ -184,6 +223,7 @@ async def _run_recipe(
     event_path: str,
     bundle_path: str,
     amplifier_bin: str,
+    cwd: str | None = None,
 ) -> int:
     """Build and run: amplifier tool invoke -b <bundle> recipes operation=execute recipe_path=... context=..."""
     recipe_context: dict[str, Any] = {}
@@ -197,14 +237,21 @@ async def _run_recipe(
             "author": event["author"],
             "labels": event["labels"],
             "event_type": event["event_type"],
+            "base_ref": event.get("base_ref", ""),
+            "head_ref": event.get("head_ref", ""),
         }
     if event_path:
         recipe_context["github_event_path"] = event_path
 
+    # Normalize {{ var }} → {{var}}: the recipes engine regex requires no spaces
+    # around variable names, but recipe YAMLs follow Jinja2 convention (with spaces).
+    # _normalize_recipe_path writes a temp file with spaces stripped if needed.
+    recipe_abs_raw = str(Path(content).resolve())
+    recipe_abs, _tmp = _normalize_recipe_path(recipe_abs_raw)
+
     # Inline JSON as a single argv element — no shell quoting needed,
     # no @file CLI support required.  See module docstring for rationale.
     context_json = json.dumps(recipe_context)
-    recipe_abs = str(Path(content).resolve())
 
     # Pass -b so recipe step agents inherit the correct bundle (e.g. triage-repro
     # for launch_dtu availability) rather than the user's ambient default bundle.
@@ -220,9 +267,13 @@ async def _run_recipe(
         f"context={context_json}",
     ]
 
-    proc = await asyncio.create_subprocess_exec(*argv)
-    await proc.wait()
-    return proc.returncode or 0
+    try:
+        proc = await asyncio.create_subprocess_exec(*argv, cwd=cwd)
+        await proc.wait()
+        return proc.returncode or 0
+    finally:
+        if _tmp is not None:
+            Path(_tmp.name).unlink(missing_ok=True)
 
 
 def cli_main() -> None:

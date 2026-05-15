@@ -8,17 +8,16 @@ includes:
   # foundation:explorer, foundation:zen-architect, foundation:bug-hunter, etc.
   # are resolvable as delegate targets.
   - bundle: git+https://github.com/microsoft/amplifier-foundation@main
+  # Anthropic provider — foundation ships this pre-built; uses ANTHROPIC_API_KEY.
+  - bundle: foundation:providers/anthropic-sonnet
 
 tools:
-  # GitHub-specific tools for issue triage — declared with local source paths
-  # so they are available in all sessions without requiring the package to be
-  # installed in the amplifier runtime environment.
+  # These tools are registered via entry points in pyproject.toml, so no
+  # source: path is needed — Amplifier discovers them through the installed
+  # amplifier_app_actions package (uv run --project ensures it is installed).
   - module: tool-github-post-comment
-    source: ../amplifier_app_actions/tools/github_post_comment
   - module: tool-github-add-label
-    source: ../amplifier_app_actions/tools/github_add_label
   - module: tool-github-checkout-repo
-    source: ../amplifier_app_actions/tools/github_checkout_repo
 ---
 
 # triage-safe Bundle
