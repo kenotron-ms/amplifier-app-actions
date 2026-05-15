@@ -150,7 +150,7 @@ async def test_injection_title_in_single_argv_element(tmp_path):
 
 
 async def test_recipe_argv(tmp_path):
-    """Recipe mode builds: amplifier tool invoke recipes operation=execute recipe_path=... context=..."""
+    """Recipe mode builds: amplifier tool invoke -b <bundle> recipes operation=execute recipe_path=... context=..."""
     recipe_file = tmp_path / "triage.yaml"
     recipe_file.write_text("steps: []")
 
@@ -170,11 +170,16 @@ async def test_recipe_argv(tmp_path):
     assert argv[0] == "amplifier"
     assert argv[1] == "tool"
     assert argv[2] == "invoke"
-    assert argv[3] == "recipes"
+    # -b <bundle_path> must appear before the tool name so recipe agents get the right bundle
+    assert "-b" in argv
+    b_idx = argv.index("-b")
+    assert "triage-safe" in argv[b_idx + 1]
+    assert argv[b_idx + 2] == "recipes"
     assert any(a.startswith("operation=execute") for a in argv)
     assert any(a.startswith("recipe_path=") for a in argv)
     assert any(a.startswith("context=") for a in argv)
-    # Must NOT use --run or --bundle (those are for prompt mode)
+    # Must NOT use 'run' or long-form '--bundle' (those are for prompt mode)
+    assert "run" not in argv[1:3]
     assert "--bundle" not in argv
 
 

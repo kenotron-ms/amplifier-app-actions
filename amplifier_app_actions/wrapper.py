@@ -131,6 +131,7 @@ async def run(
             content=content,
             event=event,
             event_path=event_path,
+            bundle_path=bundle_path,
             amplifier_bin=amplifier_bin,
         )
     else:
@@ -181,9 +182,10 @@ async def _run_recipe(
     content: str,
     event: dict[str, Any] | None,
     event_path: str,
+    bundle_path: str,
     amplifier_bin: str,
 ) -> int:
-    """Build and run: amplifier tool invoke recipes operation=execute recipe_path=... context=..."""
+    """Build and run: amplifier tool invoke -b <bundle> recipes operation=execute recipe_path=... context=..."""
     recipe_context: dict[str, Any] = {}
     if event is not None:
         recipe_context["context"] = {
@@ -204,10 +206,14 @@ async def _run_recipe(
     context_json = json.dumps(recipe_context)
     recipe_abs = str(Path(content).resolve())
 
+    # Pass -b so recipe step agents inherit the correct bundle (e.g. triage-repro
+    # for launch_dtu availability) rather than the user's ambient default bundle.
     argv = [
         amplifier_bin,
         "tool",
         "invoke",
+        "-b",
+        bundle_path,
         "recipes",
         "operation=execute",
         f"recipe_path={recipe_abs}",
