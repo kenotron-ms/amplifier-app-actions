@@ -21,6 +21,7 @@ import os
 import re
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +55,27 @@ def _normalize_recipe_path(recipe_path: str) -> tuple[str, Any]:
     tmp.write(normalized)
     tmp.flush()
     return tmp.name, tmp
+
+
+def _pre_create_session() -> str:
+    """Pre-create a blank Amplifier session directory and return its ID.
+
+    amplifier run --mode single crashes with 'Session not found' when it tries
+    to read metadata at the end of execute_single() — because the session
+    directory doesn't exist yet (execute_single never calls register_incremental_save,
+    so no prior save creates it).
+
+    By pre-creating the directory and passing --resume <id>, the session
+    directory exists when store.get_metadata() runs, so it returns {} instead
+    of raising FileNotFoundError.  This is the correct fix for the upstream
+    amplifier-app-cli bug; the stderr-suppression approach was a workaround.
+
+    See amplifier-app-cli main.py:2630 — store.get_metadata() before store.save().
+    """
+    session_id = str(uuid.uuid4())
+    session_dir = Path.home() / ".amplifier" / "sessions" / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    return session_id
 
 
 _BUILT_IN_BUNDLES: frozenset[str] = frozenset(
@@ -205,60 +227,24 @@ async def _run_prompt_or_attractor(
         # PROMPT or PROMPT_SOURCE — content is already the text
         full_prompt = f"{ctx_prefix}{content}"
 
-    argv = [amplifier_bin, "run", "--bundle", bundle_path]
+    # Pre-create the session directory and pass --resume <id> so the Amplifier
+    # CLI uses a known session ID from the start.  This fixes an upstream bug in
+    # amplifier-app-cli execute_single() (main.py:2630): it calls
+    # store.get_metadata(id) BEFORE store.save(), which raises FileNotFoundError
+    # for brand-new sessions because the directory doesn't exist yet.  With
+    # --resume pointing at a pre-created directory, get_metadata() finds {} and
+    # save() succeeds — clean exit, no false-positive code 1.
+    session_id = _pre_create_session()
+
+    argv = [amplifier_bin, "run", "--bundle", bundle_path, "--resume", session_id]
     if provider:
         argv += ["--provider", provider]
     if model:
         argv += ["--model", model]
     argv += ["--mode", "single", "--", full_prompt]
 
-    # Pipe both stdout and stderr so we can detect known false-positive exit codes
-    # while still streaming every line in real time (GHA sees live output).
-    # The "Session not found" teardown error is emitted on stdout by the Amplifier
-    # CLI, so we must tail stdout — not just stderr — to suppress it correctly.
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        cwd=cwd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-
-    # Keep only the tail of each stream for post-exit pattern matching.
-    _stdout_tail: list[str] = []
-    _stderr_tail: list[str] = []
-
-    async def _drain_stdout() -> None:
-        assert proc.stdout is not None
-        async for raw in proc.stdout:
-            line = raw.decode("utf-8", errors="replace")
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            _stdout_tail.append(line)
-            if len(_stdout_tail) > 20:
-                _stdout_tail.pop(0)
-
-    async def _drain_stderr() -> None:
-        assert proc.stderr is not None
-        async for raw in proc.stderr:
-            line = raw.decode("utf-8", errors="replace")
-            sys.stderr.write(line)
-            sys.stderr.flush()
-            _stderr_tail.append(line)
-            if len(_stderr_tail) > 20:
-                _stderr_tail.pop(0)
-
-    await asyncio.gather(proc.wait(), _drain_stdout(), _drain_stderr())
-
-    if proc.returncode:
-        # Known false positive: Amplifier CLI session cleanup error that fires
-        # after `--mode single` completes its work.  The agent finished, posted
-        # its output, and the session teardown then failed to find the already-
-        # cleaned-up session.  Treat this specific pattern as success.
-        # Check both stdout and stderr — the CLI emits this on stdout.
-        combined_tail = "".join(_stdout_tail + _stderr_tail)
-        if re.search(r"Session '[0-9a-f-]+' not found", combined_tail):
-            return 0
-
+    proc = await asyncio.create_subprocess_exec(*argv, cwd=cwd)
+    await proc.wait()
     return proc.returncode or 0
 
 
