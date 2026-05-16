@@ -81,6 +81,15 @@ runs:
         sudo incus admin init --auto
         echo "::endgroup::"
 
+        echo "::group::Grant runner access to Incus socket"
+        # amplifier-digital-twin calls the Incus daemon directly (no sudo).
+        # Amplifier's bash hook blocks privilege escalation in strict mode, so
+        # sudo incus would be denied. usermod group changes don't take effect
+        # in the current shell, so chmod 666 is the only reliable approach.
+        # The socket is already isolated within the GHA runner environment.
+        sudo chmod 666 /var/lib/incus/unix.socket
+        echo "::endgroup::"
+
     - name: Run Amplifier action
       shell: bash
       env:
