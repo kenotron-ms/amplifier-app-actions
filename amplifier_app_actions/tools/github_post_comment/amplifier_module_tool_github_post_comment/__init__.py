@@ -1,4 +1,8 @@
-"""GitHub post comment tool — POST a comment to a GitHub issue or pull request."""
+"""GitHub post/update comment tool.
+
+Creates a new comment on a GitHub issue or PR, or updates an existing one.
+Pass comment_id to update; omit it to create.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +15,14 @@ from amplifier_core import ModuleCoordinator, ToolResult
 
 
 class GitHubPostCommentTool:
-    """Post a Markdown comment to a GitHub issue or pull request via the GitHub REST API."""
+    """Post or update a Markdown comment on a GitHub issue or pull request.
+
+    - Omit comment_id to CREATE a new comment (POST).
+    - Pass comment_id to UPDATE an existing comment (PATCH).
+
+    Always returns comment_id so callers can pass it back to update later.
+    Use this to keep a single comment per run rather than creating noise.
+    """
 
     def __init__(self, config: dict[str, Any]) -> None:
         self.github_token: str = config.get("github_token") or os.environ.get(
@@ -26,11 +37,13 @@ class GitHubPostCommentTool:
     @property
     def description(self) -> str:
         return (
-            "Post a comment to a GitHub issue or pull request. "
-            "Required inputs: owner (str) — repository owner or org; "
-            "repo (str) — repository name; "
-            "issue_number (int) — issue or PR number; "
-            "body (str) — comment text (Markdown supported)."
+            "Post or update a comment on a GitHub issue or pull request. "
+            "Omit comment_id to CREATE a new comment; pass comment_id to UPDATE "
+            "an existing one. Always returns comment_id — pass it back on the "
+            "next call to keep a single comment per run instead of creating noise. "
+            "Required for create: owner, repo, issue_number, body. "
+            "Required for update: owner, repo, comment_id, body "
+            "(issue_number not needed when updating)."
         )
 
     @property
@@ -48,24 +61,35 @@ class GitHubPostCommentTool:
                 },
                 "issue_number": {
                     "type": "integer",
-                    "description": "The issue or pull request number to comment on.",
+                    "description": (
+                        "The issue or pull request number. "
+                        "Required when creating a new comment; ignored when updating."
+                    ),
                 },
                 "body": {
                     "type": "string",
                     "description": "Comment body text. Markdown is supported.",
                 },
+                "comment_id": {
+                    "type": "integer",
+                    "description": (
+                        "If provided, UPDATE this existing comment instead of "
+                        "creating a new one. Use the comment_id returned by a "
+                        "previous call to this tool."
+                    ),
+                },
             },
-            "required": ["owner", "repo", "issue_number", "body"],
+            "required": ["owner", "repo", "body"],
         }
 
     async def execute(self, input_data: dict[str, Any]) -> ToolResult:
-        """Post a comment and return a ToolResult with comment_id and url on success."""
+        """Create or update a comment and return comment_id and url."""
         owner: str = input_data["owner"]
         repo: str = input_data["repo"]
-        issue_number: int = input_data["issue_number"]
         body: str = input_data["body"]
+        comment_id: int | None = input_data.get("comment_id")
+        issue_number: int | None = input_data.get("issue_number")
 
-        url = f"{self.base_url}/repos/{owner}/{repo}/issues/{issue_number}/comments"
         headers = {
             "Authorization": f"Bearer {self.github_token}",
             "Accept": "application/vnd.github+json",
@@ -73,16 +97,27 @@ class GitHubPostCommentTool:
         }
 
         async with httpx.AsyncClient() as client:
-            response = await client.post(url, json={"body": body}, headers=headers)
+            if comment_id is not None:
+                # UPDATE existing comment
+                url = (
+                    f"{self.base_url}/repos/{owner}/{repo}/issues/comments/{comment_id}"
+                )
+                response = await client.patch(url, json={"body": body}, headers=headers)
+            else:
+                # CREATE new comment
+                if not issue_number:
+                    return ToolResult(
+                        success=False,
+                        output="issue_number is required when creating a new comment.",
+                    )
+                url = f"{self.base_url}/repos/{owner}/{repo}/issues/{issue_number}/comments"
+                response = await client.post(url, json={"body": body}, headers=headers)
 
         if response.status_code not in (200, 201):
             return ToolResult(
                 success=False,
-                output=f"Failed to post comment: HTTP {response.status_code}",
-                error={
-                    "status_code": response.status_code,
-                    "body": response.text,
-                },
+                output=f"Failed: HTTP {response.status_code}",
+                error={"status_code": response.status_code, "body": response.text},
             )
 
         data: dict[str, Any] = response.json()
