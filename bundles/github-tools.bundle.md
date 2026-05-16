@@ -8,11 +8,18 @@ includes:
   # foundation:explorer, foundation:zen-architect, foundation:bug-hunter, etc.
   # are resolvable as delegate targets.
   - bundle: git+https://github.com/microsoft/amplifier-foundation@main
-  # Recipes tool — required for recipe execution via `amplifier tool invoke recipes`.
-  # Not included in foundation by default; must be explicit.
+  # Recipes tool — required for recipe execution.
   - bundle: git+https://github.com/microsoft/amplifier-bundle-recipes@main
-  # Anthropic provider — foundation ships this pre-built; uses ANTHROPIC_API_KEY.
-  - bundle: foundation:providers/anthropic-sonnet
+
+providers:
+  # Anthropic provider declared directly (not via foundation:providers/anthropic-sonnet
+  # shorthand) because the foundation: namespace shorthand isn't reliably resolved
+  # in in-process bundle loading — the namespace registers from includes above,
+  # but the shorthand reference races against that registration.
+  - module: provider-anthropic
+    source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
+    config:
+      default_model: claude-sonnet-4-5
 
 tools:
   # These tools are registered via entry points in pyproject.toml, so no
