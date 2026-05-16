@@ -15,6 +15,8 @@ Design notes:
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import re
 import tempfile
@@ -51,6 +53,22 @@ def _normalize_recipe_path(recipe_path: str) -> tuple[str, Any]:
     tmp.write(normalized)
     tmp.flush()
     return tmp.name, tmp
+
+
+_MAX_RETRIES = 2
+_RETRY_DELAYS = (5, 15)  # seconds between retry attempts
+
+
+def _is_transient_api_error(exc: Exception) -> bool:
+    """True for Anthropic 500/overloaded errors that are worth retrying."""
+    msg = str(exc)
+    try:
+        data = json.loads(msg)
+        error_type = data.get("error", {}).get("type", "")
+        return error_type in ("api_error", "overloaded_error")
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        lower = msg.lower()
+        return "internal server error" in lower or "overloaded" in lower
 
 
 _BUILT_IN_BUNDLES: frozenset[str] = frozenset(
@@ -240,17 +258,27 @@ async def _run_prompt_or_attractor(
     else:
         full_prompt = f"{ctx_prefix}{content}"
 
-    initialized, console = await _create_session(bundle_path, cwd)
-    try:
-        response = await initialized.session.execute(full_prompt)
-        if response:
-            console.print(Markdown(response))
-        return 0
-    except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]Error:[/red] {exc}")
-        return 1
-    finally:
-        await initialized.cleanup()
+    for attempt in range(_MAX_RETRIES + 1):
+        initialized, console = await _create_session(bundle_path, cwd)
+        try:
+            response = await initialized.session.execute(full_prompt)
+            if response:
+                console.print(Markdown(response))
+            return 0
+        except Exception as exc:  # noqa: BLE001
+            if attempt < _MAX_RETRIES and _is_transient_api_error(exc):
+                delay = _RETRY_DELAYS[attempt]
+                print(
+                    f"[retry] Transient API error on attempt {attempt + 1},"
+                    f" retrying in {delay}s: {exc!s:.120}"
+                )
+                await asyncio.sleep(delay)
+            else:
+                console.print(f"[red]Error:[/red] {exc}")
+                return 1
+        finally:
+            await initialized.cleanup()
+    return 1
 
 
 async def _run_recipe(
@@ -315,7 +343,6 @@ def cli_main() -> None:
     Parses command-line flags and dispatches to :func:`run` via asyncio.run.
     The return code is propagated via sys.exit.
     """
-    import asyncio
     import sys
     import argparse
 
