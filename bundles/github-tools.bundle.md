@@ -19,7 +19,7 @@ providers:
   - module: provider-anthropic
     source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
     config:
-      default_model: claude-sonnet-4-5
+      default_model: claude-sonnet-4-6
 
 tools:
   # These tools are registered via entry points in pyproject.toml, so no
