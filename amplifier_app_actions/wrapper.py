@@ -1,25 +1,22 @@
-"""Thin wrapper around the amplifier CLI — builds argv and runs subprocess.
+"""Amplifier session runner — creates and executes sessions in-process.
 
-This module is the single dispatch point for all Amplifier CLI invocations.
-It never uses shell=True; all arguments are passed as discrete elements to
-asyncio.create_subprocess_exec so injection payloads in event fields cannot
-break out of the final prompt argument.
+Uses amplifier_app_cli.session_runner.create_initialized_session as the
+single entry point for all session creation, avoiding subprocess overhead
+and the Session-not-found false-positive exit code that subprocess mode
+triggered (amplifier-app-cli bug: execute_single calls store.get_metadata()
+before store.save(), which raises FileNotFoundError for brand-new sessions).
 
-Design choice recorded here:
-  recipe context is passed as inline JSON in a single argv element
-  (context=<json>), not via a @file reference.  The CLI's tool invoke
-  command treats each positional argument as a key=value pair; inline JSON
-  avoids the need for CLI support of @file syntax and keeps the argument
-  list deterministic for tests.
+Design notes:
+  - Prompt/attractor: create_initialized_session → session.execute(prompt)
+  - Recipe: create_initialized_session → coordinator.get("tools")["recipes"].execute(...)
+  - Recipe YAML is normalised before execution (_normalize_recipe_path) because
+    the recipes engine regex requires {{var}} without spaces.
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
 import os
 import re
-import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -63,15 +60,59 @@ _DEFAULT_BUNDLE = "github-tools"
 
 
 def _resolve_bundle_path(bundle: str, action_path: Path) -> str:
-    """Resolve a built-in bundle alias to an absolute path.
+    """Resolve a built-in bundle alias to a file:// URI.
 
-    Built-in aliases (github-tools, github-tools-dtu, github-tools-amplifier-dev) resolve
+    Built-in aliases (triage-safe, triage-repro, triage-amplifier) resolve
     to ``action_path/bundles/<alias>.bundle.md``.  Any other value is returned
     unchanged so callers can pass arbitrary local or remote paths.
     """
     if bundle in _BUILT_IN_BUNDLES:
         return "file://" + str(action_path / "bundles" / f"{bundle}.bundle.md")
     return bundle
+
+
+async def _create_session(
+    bundle_path: str,
+    cwd: str | None = None,
+) -> tuple[Any, Any]:
+    """Load bundle and create an initialised Amplifier session in-process.
+
+    Uses create_initialized_session — the single canonical entry point for all
+    session creation in amplifier-app-cli.  It wires up display system,
+    session spawning, approval system, and all other capabilities in the
+    correct order.
+
+    Returns (InitializedSession, Console).
+    """
+    from amplifier_app_cli.console import console as cli_console  # Rich Console
+    from amplifier_app_cli.session_runner import (
+        SessionConfig,
+        create_initialized_session,
+    )
+    from amplifier_foundation import load_bundle
+
+    # Change directory so relative @mention paths and bundle source resolution
+    # anchor correctly to the action root (mirrors what cwd= did for subprocesses).
+    prev_cwd = os.getcwd()
+    if cwd:
+        os.chdir(cwd)
+    try:
+        bundle = await load_bundle(bundle_path)
+        prepared = await bundle.prepare()
+    finally:
+        if cwd:
+            os.chdir(prev_cwd)
+
+    session_config = SessionConfig(
+        config={},
+        search_paths=[Path(cwd) if cwd else Path.cwd()],
+        verbose=False,
+        prepared_bundle=prepared,
+        bundle_name=bundle_path,
+    )
+
+    initialized = await create_initialized_session(session_config, cli_console)
+    return initialized, cli_console
 
 
 async def run(
@@ -86,9 +127,9 @@ async def run(
     event_path: str = "",
     enable_reproduction: bool = False,
     action_path: Path | None = None,
-    amplifier_bin: str = "amplifier",
+    amplifier_bin: str = "amplifier",  # kept for API compat, unused in in-process mode
 ) -> int:
-    """Build argv and invoke the amplifier CLI.  Return the subprocess exit code.
+    """Create an Amplifier session in-process and execute the instruction.
 
     Parameters
     ----------
@@ -101,11 +142,13 @@ async def run(
     attractor_source:
         Path to an attractor/guidance DOT file.
     provider:
-        AI provider override (e.g. 'anthropic', 'openai').  Empty = use bundle default.
+        AI provider override (e.g. 'anthropic').  Currently informational —
+        the bundle specifies the provider; explicit override support is a TODO.
     model:
-        Model name override.  Empty = use provider default.
+        Model name override.  Currently informational — the bundle specifies the
+        model; explicit override support is a TODO.
     bundle:
-        Bundle alias ('github-tools', 'github-tools-dtu', 'github-tools-amplifier-dev') or
+        Bundle alias ('triage-safe', 'triage-repro', 'triage-amplifier') or
         any path/URL.  Aliases are resolved relative to action_path.
     github_token:
         GitHub token to inject into GITHUB_TOKEN env via setdefault.
@@ -113,18 +156,18 @@ async def run(
         Path to the GitHub event JSON file.  When it exists the event is
         parsed and a context block is prepended to the prompt.
     enable_reproduction:
-        When True and bundle is the default ('github-tools'), upgrade to
-        'github-tools-dtu' (which includes digital-twin-universe).
+        When True and bundle is the default ('triage-safe'), upgrade to
+        'triage-repro' (which includes digital-twin-universe).
     action_path:
         Repository root for resolving built-in bundle aliases.  Defaults to
         the parent directory of this package.
     amplifier_bin:
-        Name or path of the amplifier binary.
+        Ignored — kept for backward-compatible call sites.
 
     Returns
     -------
     int
-        Process exit code (0 on success).
+        0 on success, 1 on failure.
     """
     # Resolve action_path to parent of package directory if not supplied
     if action_path is None:
@@ -135,7 +178,7 @@ async def run(
     if enable_reproduction and bundle == _DEFAULT_BUNDLE:
         effective_bundle = "github-tools-dtu"
 
-    # Resolve built-in bundle aliases to absolute paths
+    # Resolve built-in bundle aliases to absolute file:// paths
     bundle_path = _resolve_bundle_path(effective_bundle, action_path)
 
     # Export GITHUB_TOKEN via setdefault only — don't overwrite the runner token
@@ -157,9 +200,7 @@ async def run(
         event = parse_event(event_path)
         ctx_prefix = format_context_block(event) + "\n\n"
 
-    # Use action_path as the subprocess CWD so that relative paths inside
-    # bundle files (includes, tool sources) resolve from the action root,
-    # not from whatever directory the CLI was invoked from.
+    # Use action_path as the working directory for bundle-relative resolution.
     action_cwd = str(action_path)
 
     if itype == InstructionType.RECIPE:
@@ -168,7 +209,6 @@ async def run(
             event=event,
             event_path=event_path,
             bundle_path=bundle_path,
-            amplifier_bin=amplifier_bin,
             cwd=action_cwd,
         )
     else:
@@ -177,9 +217,6 @@ async def run(
             content=content,
             ctx_prefix=ctx_prefix,
             bundle_path=bundle_path,
-            provider=provider,
-            model=model,
-            amplifier_bin=amplifier_bin,
             cwd=action_cwd,
         )
 
@@ -189,12 +226,11 @@ async def _run_prompt_or_attractor(
     content: str,
     ctx_prefix: str,
     bundle_path: str,
-    provider: str,
-    model: str,
-    amplifier_bin: str,
     cwd: str | None = None,
 ) -> int:
-    """Build and run: amplifier run --bundle <path> [--provider P] [--model M] --mode single -- <prompt>"""
+    """Create an in-process session and execute a prompt or attractor."""
+    from rich.markdown import Markdown
+
     if itype == InstructionType.ATTRACTOR:
         full_prompt = (
             f"{ctx_prefix}"
@@ -202,60 +238,19 @@ async def _run_prompt_or_attractor(
             "Call the attractor tool to run it directly."
         )
     else:
-        # PROMPT or PROMPT_SOURCE — content is already the text
         full_prompt = f"{ctx_prefix}{content}"
 
-    argv = [amplifier_bin, "run", "--bundle", bundle_path]
-    if provider:
-        argv += ["--provider", provider]
-    if model:
-        argv += ["--model", model]
-    argv += ["--mode", "single", "--", full_prompt]
-
-    # Capture stdout+stderr so we can detect the known false-positive exit code
-    # while still streaming every line in real time (GHA sees live output).
-    # Upstream bug: amplifier-app-cli execute_single() (main.py:2630) calls
-    # store.get_metadata(id) BEFORE store.save(), which raises FileNotFoundError
-    # for new sessions.  The fix belongs in app-cli (use store.exists() first),
-    # but until that lands we suppress the specific false-positive exit code here.
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        cwd=cwd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-
-    _stdout_tail: list[str] = []
-    _stderr_tail: list[str] = []
-
-    async def _drain_stdout() -> None:
-        assert proc.stdout is not None
-        async for raw in proc.stdout:
-            line = raw.decode("utf-8", errors="replace")
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            _stdout_tail.append(line)
-            if len(_stdout_tail) > 20:
-                _stdout_tail.pop(0)
-
-    async def _drain_stderr() -> None:
-        assert proc.stderr is not None
-        async for raw in proc.stderr:
-            line = raw.decode("utf-8", errors="replace")
-            sys.stderr.write(line)
-            sys.stderr.flush()
-            _stderr_tail.append(line)
-            if len(_stderr_tail) > 20:
-                _stderr_tail.pop(0)
-
-    await asyncio.gather(proc.wait(), _drain_stdout(), _drain_stderr())
-
-    if proc.returncode:
-        combined = "".join(_stdout_tail + _stderr_tail)
-        if re.search(r"Session '[0-9a-f-]+' not found", combined):
-            return 0
-
-    return proc.returncode or 0
+    initialized, console = await _create_session(bundle_path, cwd)
+    try:
+        response = await initialized.session.execute(full_prompt)
+        if response:
+            console.print(Markdown(response))
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Error:[/red] {exc}")
+        return 1
+    finally:
+        await initialized.cleanup()
 
 
 async def _run_recipe(
@@ -263,10 +258,9 @@ async def _run_recipe(
     event: dict[str, Any] | None,
     event_path: str,
     bundle_path: str,
-    amplifier_bin: str,
     cwd: str | None = None,
 ) -> int:
-    """Build and run: amplifier tool invoke -b <bundle> recipes operation=execute recipe_path=... context=..."""
+    """Create an in-process session and execute a recipe."""
     recipe_context: dict[str, Any] = {}
     if event is not None:
         recipe_context["context"] = {
@@ -284,45 +278,45 @@ async def _run_recipe(
     if event_path:
         recipe_context["github_event_path"] = event_path
 
-    # Normalize {{ var }} → {{var}}: the recipes engine regex requires no spaces
-    # around variable names, but recipe YAMLs follow Jinja2 convention (with spaces).
-    # _normalize_recipe_path writes a temp file with spaces stripped if needed.
+    # Normalise {{ var }} → {{var}} before the recipes engine sees the file.
     recipe_abs_raw = str(Path(content).resolve())
     recipe_abs, _tmp = _normalize_recipe_path(recipe_abs_raw)
 
-    # Inline JSON as a single argv element — no shell quoting needed,
-    # no @file CLI support required.  See module docstring for rationale.
-    context_json = json.dumps(recipe_context)
-
-    # Pass -b so recipe step agents inherit the correct bundle (e.g. github-tools-dtu
-    # for DTU availability) rather than the user's ambient default bundle.
-    argv = [
-        amplifier_bin,
-        "tool",
-        "invoke",
-        "-b",
-        bundle_path,
-        "recipes",
-        "operation=execute",
-        f"recipe_path={recipe_abs}",
-        f"context={context_json}",
-    ]
-
+    initialized, console = await _create_session(bundle_path, cwd)
     try:
-        proc = await asyncio.create_subprocess_exec(*argv, cwd=cwd)
-        await proc.wait()
-        return proc.returncode or 0
+        coordinator = initialized.session.coordinator
+        tools = coordinator.get("tools") or {}
+        recipe_tool = tools.get("recipes")
+        if recipe_tool is None:
+            available = sorted(tools.keys())
+            raise RuntimeError(
+                f"Tool 'recipes' not found. Available: {', '.join(available)}"
+            )
+        await recipe_tool.execute(
+            {
+                "operation": "execute",
+                "recipe_path": recipe_abs,
+                "context": recipe_context,
+            }
+        )
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Error:[/red] {exc}")
+        return 1
     finally:
         if _tmp is not None:
             Path(_tmp.name).unlink(missing_ok=True)
+        await initialized.cleanup()
 
 
 def cli_main() -> None:
     """CLI entry point for the ``amplifier-triage`` command.
 
     Parses command-line flags and dispatches to :func:`run` via asyncio.run.
-    The return code from the amplifier subprocess is propagated via sys.exit.
+    The return code is propagated via sys.exit.
     """
+    import asyncio
+    import sys
     import argparse
 
     parser = argparse.ArgumentParser(prog="amplifier-triage")
