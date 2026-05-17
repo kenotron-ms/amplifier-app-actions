@@ -1,0 +1,40 @@
+# Reference workflow for AI-assisted issue investigation.
+#
+# Copy this file to .github/workflows/investigate.yml in your repository.
+#
+# Triggered by posting a comment containing exactly "/investigate" on an issue.
+# The agent checks out the repository, examines relevant code, and posts
+# detailed findings as a follow-up comment.
+#
+# Prerequisites:
+#   1. Set the ANTHROPIC_API_KEY repository secret.
+
+name: Investigate
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  investigate:
+    if: github.event.comment.body == '/investigate'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: microsoft/amplifier-app-actions@v1
+        with:
+          bundle: git+https://github.com/microsoft/amplifier-bundle-dev-support@main#subdirectory=bundles/investigate.bundle.md
+          prompt: |
+            A contributor requested investigation of this issue.
+            Read the issue from the GitHub event context, examine the repository
+            code, and post your findings as a comment.
+          provider: anthropic
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
