@@ -86,11 +86,34 @@ The action reads the GitHub event (issue or PR), runs an Amplifier agent session
 | `prompt_source` | Path or URL to a prompt file | — |
 | `recipe_source` | Path or URL to an Amplifier recipe YAML | — |
 | `attractor_source` | Path or URL to an attractor `.dot` file | — |
+| `bundle` | Bundle to load — local path or `git+https://host/org/repo@ref#subdirectory=bundle.md` URI. When omitted, the built-in `github-tools` bundle is used. | `github-tools` |
 | `provider` | LLM provider: `anthropic`, `openai`, `azure`, `ollama` | `anthropic` |
 | `model` | Model name override — falls back to provider default if omitted | — |
 | `github_token` | GitHub token for API calls | `${{ github.token }}` |
 
 Exactly one of `prompt`, `prompt_source`, `recipe_source`, or `attractor_source` must be set.
+
+### Built-in bundle tiers
+
+When no `bundle:` is specified the action uses `github-tools`. Two higher tiers are also available as built-in aliases:
+
+| Alias | What it adds |
+|-------|-------------|
+| `github-tools` | Foundation agents, Anthropic provider, `github_post_comment`, `github_add_label`, `github_checkout_repo` |
+| `github-tools-dtu` | Everything in `github-tools` + Digital Twin Universe for containerised reproduction (`enable_reproduction: true`) |
+| `github-tools-amplifier-dev` | Everything in `github-tools-dtu` (placeholder for future Amplifier-ecosystem tooling) |
+
+### Bringing your own bundle
+
+Point `bundle:` at any bundle file via a `git+https://` URI:
+
+```yaml
+bundle: git+https://github.com/kenotron-ms/amplifier-bundle-dev-support@main#subdirectory=bundles/issue-triage.bundle.md
+```
+
+The `#subdirectory=` fragment selects a specific file inside the repo. The named bundle becomes the active bundle for the entire run — it can compose the built-in `github-tools` bundle to inherit all standard tools while adding its own context and behaviors on top.
+
+[`kenotron-ms/amplifier-bundle-dev-support`](https://github.com/kenotron-ms/amplifier-bundle-dev-support) is the reference bundle for Amplifier development workflows (issue triage, deep investigation, PR review).
 
 Provider API keys are passed as environment variables, not action inputs. Set the appropriate secret for your provider:
 
