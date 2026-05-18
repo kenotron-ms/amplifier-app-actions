@@ -10,6 +10,8 @@ includes:
   - bundle: git+https://github.com/microsoft/amplifier-foundation@main
   # Recipes tool — required for recipe execution.
   - bundle: git+https://github.com/microsoft/amplifier-bundle-recipes@main
+  # Attractor pipeline runner — enables DOT pipeline execution via tool-pipeline-run
+  - bundle: git+https://github.com/microsoft/amplifier-bundle-attractor@main
 
 providers:
   # Anthropic provider declared directly (not via foundation:providers/anthropic-sonnet
@@ -45,6 +47,6 @@ amplifier-app-actions workflows.
 
 ## Bundle Tiers
 
-- **github-tools** (this bundle): foundation + GitHub API tools
+- **github-tools** (this bundle): foundation + GitHub API tools + Attractor pipeline execution support
 - **github-tools-dtu**: adds `digital-twin-universe` for containerized execution
 - **github-tools-amplifier-dev**: adds Amplifier-ecosystem dev tooling
