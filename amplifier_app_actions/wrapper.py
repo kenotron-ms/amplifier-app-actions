@@ -317,6 +317,34 @@ async def _run_attractor(
         )
     dot_source = dot_path.read_text(encoding="utf-8")
 
+    # Inject issue coordinates into the DOT goal so pipeline nodes can
+    # reference owner/repo/number via $goal. We extract only the structured
+    # header (single line) — injecting the full body breaks the DOT parser
+    # because issue text contains words that look like DOT node identifiers.
+    if ctx_prefix:
+        import re as _re
+        # ctx_prefix header: "[issues: #N in owner/repo]"
+        header_match = _re.search(
+            r"\[(?P<type>issues|pull_request): #(?P<number>\d+) in (?P<owner>[^/\]]+)/(?P<repo>[^\]]+)\]",
+            ctx_prefix,
+        )
+        title_match = _re.search(r"Title: (.+)", ctx_prefix)
+        if header_match:
+            owner = header_match.group("owner")
+            repo = header_match.group("repo")
+            number = header_match.group("number")
+            title = title_match.group(1).strip() if title_match else "Issue"
+            # Short, safe single-line goal — no embedded newlines or special chars
+            goal_text = (
+                f"Issue #{number} in {owner}/{repo}: {title}"
+            ).replace('"', "'")
+            dot_source = _re.sub(
+                r'goal\s*=\s*"[^"]*"',
+                f'goal="{goal_text}"',
+                dot_source,
+                count=1,
+            )
+
     # Change to cwd for bundle resolution (mirrors _create_session behaviour)
     prev_cwd = os.getcwd()
     if cwd:
@@ -328,13 +356,28 @@ async def _run_attractor(
         # Compose with loop-pipeline as the session orchestrator.
         # Bundle.compose() merges parent tool list into child — GitHub tools
         # declared in the base bundle YAML flow to per-node child sessions.
+        import uuid
+        # Unique logs_root per run — loop-pipeline defaults to a fixed shared
+        # /tmp/attractor-pipeline path which causes stale checkpoint reuse across runs.
+        run_id = uuid.uuid4().hex[:8]
+        logs_root = str(Path(tempfile.gettempdir()) / f"triage-pipeline-{run_id}")
+
         overlay = Bundle(
             name="triage-pipeline",
             version="1.0.0",
             session={
                 "orchestrator": {
                     "module": "loop-pipeline",
-                    "config": {"dot_source": dot_source},
+                    # Explicit source so the module resolver uses the Attractor
+                    # bundle's loop-pipeline, not a cached module with a similar name.
+                    "source": (
+                        "git+https://github.com/microsoft/amplifier-bundle-attractor"
+                        "@main#subdirectory=modules/loop-pipeline"
+                    ),
+                    "config": {
+                        "dot_source": dot_source,
+                        "logs_root": logs_root,
+                    },
                 }
             },
         )
