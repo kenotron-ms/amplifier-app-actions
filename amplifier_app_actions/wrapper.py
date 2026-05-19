@@ -10,8 +10,11 @@ Design notes:
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import logging
 import os
 import re
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -71,28 +74,19 @@ def _resolve_bundle_path(bundle: str, action_path: Path) -> str:
     return bundle
 
 
-def _parse_goal(ctx_prefix: str) -> str:
-    """Extract a one-line goal string from a GitHub event context prefix.
+def _configure_pipeline_progress_logger() -> None:
+    """Route pipeline progress hook logs to stdout for GitHub Actions log visibility.
 
-    Looks for the ``[issues: #N in owner/repo]`` header and ``Title:`` line
-    that ``format_context_block`` produces.  Falls back to a generic string
-    when the prefix is absent or unparseable.
+    Configures the hooks-pipeline-progress logger to emit [PIPELINE] ▶/✓ lines
+    in real-time to stdout.  Idempotent — safe to call multiple times.
     """
-    import re as _re
-
-    if not ctx_prefix:
-        return "Run the pipeline."
-    m = _re.search(
-        r"\[(?P<type>issues|pull_request): #(?P<number>\d+) in (?P<owner>[^/\]]+)/(?P<repo>[^\]]+)\]",
-        ctx_prefix,
-    )
-    t = _re.search(r"Title: (.+)", ctx_prefix)
-    if m:
-        title = t.group(1).strip() if t else "Pipeline run"
-        return f"Issue #{m.group('number')} in {m.group('owner')}/{m.group('repo')}: {title}".replace(
-            '"', "'"
-        )
-    return "Run the pipeline."
+    log = logging.getLogger("amplifier_module_hooks_pipeline_progress")
+    if not log.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        log.addHandler(handler)
+        log.setLevel(logging.DEBUG)
+        log.propagate = False
 
 
 def _register_spawn_capability(session: Any, prepared: Any) -> None:
@@ -126,10 +120,10 @@ def _register_spawn_capability(session: Any, prepared: Any) -> None:
         config: dict[str, Any] = {}
         if agent_name in agent_configs:
             config = agent_configs[agent_name]
-        elif hasattr(prepared, "bundle") and agent_name in (
-            prepared.bundle.agents or {}
-        ):
-            config = prepared.bundle.agents[agent_name]
+        elif hasattr(prepared, "bundle"):
+            agents = prepared.bundle.agents or {}
+            if agent_name in agents:
+                config = agents[agent_name]
 
         child_bundle = Bundle(
             name=agent_name or "pipeline-node",
@@ -158,7 +152,8 @@ def _register_spawn_capability(session: Any, prepared: Any) -> None:
             provider_preferences=provider_preferences,
             self_delegation_depth=self_delegation_depth,
         )
-        output = (result or {}).get("output") or (result or {}).get("response") or ""
+        result_dict = result or {}
+        output = result_dict.get("output") or result_dict.get("response") or ""
         if output:
             print(f"\n[{agent_name} output]\n{str(output)}", flush=True)
         return result
@@ -188,15 +183,9 @@ async def _create_session(
 
     # Change directory so relative @mention paths and bundle source resolution
     # anchor correctly to the action root (mirrors what cwd= did for subprocesses).
-    prev_cwd = os.getcwd()
-    if cwd:
-        os.chdir(cwd)
-    try:
+    with contextlib.chdir(cwd) if cwd else contextlib.nullcontext():
         bundle = await load_bundle(bundle_path)
         prepared = await bundle.prepare()
-    finally:
-        if cwd:
-            os.chdir(prev_cwd)
 
     session_config = SessionConfig(
         config={},
@@ -344,27 +333,24 @@ async def _run_attractor(
     from amplifier_foundation import Bundle, load_bundle
     from rich.markdown import Markdown
 
-    if not Path(content).exists():
-        raise FileNotFoundError(
-            f"Attractor DOT file not found: {content}. "
-            "Ensure actions/checkout is present in your workflow."
-        )
-
     # Pass the full event context as the pipeline goal so $goal in every
     # DOT node prompt (investigate, quality_eval, comment_draft) contains
     # the complete issue body, labels, and author — not just the title.
     # Without the body the investigate node has no idea what the issue says
     # and cannot do ecosystem-level root-cause analysis.
     goal = ctx_prefix.strip() if ctx_prefix else "Triage the GitHub issue."
-    dot_source = Path(content).read_text(encoding="utf-8")
+    try:
+        dot_source = Path(content).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"Attractor DOT file not found: {content}. "
+            "Ensure actions/checkout is present in your workflow."
+        ) from None
 
     # --- Bundle preparation -------------------------------------------
     # Compose base pipeline bundle with a dot_source overlay, then prepare.
     # prepare() installs loop-pipeline and loop-agent in the Python env.
-    prev_cwd = os.getcwd()
-    if cwd:
-        os.chdir(cwd)
-    try:
+    with contextlib.chdir(cwd) if cwd else contextlib.nullcontext():
         base_bundle = await load_bundle(bundle_path)
         overlay = Bundle(
             name="attractor-overlay",
@@ -378,9 +364,6 @@ async def _run_attractor(
         )
         composed = base_bundle.compose(overlay)
         prepared = await composed.prepare()
-    finally:
-        if cwd:
-            os.chdir(prev_cwd)
 
     # --- Session creation with full CLI wiring -----------------------
     session_config = SessionConfig(
@@ -394,15 +377,7 @@ async def _run_attractor(
 
     # Route pipeline progress hook logs to stdout so GH Actions logs show
     # [PIPELINE] ▶ node_start / ✓ node_complete / -> edge lines in real-time.
-    import logging as _logging
-    import sys as _sys
-    _ph_log = _logging.getLogger("amplifier_module_hooks_pipeline_progress")
-    if not _ph_log.handlers:
-        _h = _logging.StreamHandler(_sys.stdout)
-        _h.setFormatter(_logging.Formatter("%(message)s"))
-        _ph_log.addHandler(_h)
-    _ph_log.setLevel(_logging.DEBUG)
-    _ph_log.propagate = False
+    _configure_pipeline_progress_logger()
 
     try:
         # Override the CLI's standard session.spawn with one backed by
@@ -511,7 +486,6 @@ def cli_main() -> None:
     Parses command-line flags and dispatches to :func:`run` via asyncio.run.
     The return code is propagated via sys.exit.
     """
-    import sys
     import argparse
 
     parser = argparse.ArgumentParser(prog="amplifier-triage")

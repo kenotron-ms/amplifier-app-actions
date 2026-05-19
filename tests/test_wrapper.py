@@ -60,17 +60,26 @@ def _make_mock_initialized():
 
 
 @contextmanager
-def _in_process(mock_initialized):
-    """Patch all in-process session infrastructure for prompt/recipe tests."""
+def _in_process(mock_initialized, *, captured_paths: list[str] | None = None):
+    """Patch all in-process session infrastructure for prompt/recipe tests.
+
+    Pass ``captured_paths`` to record every path argument passed to load_bundle.
+    """
     mock_bundle = MagicMock()
     mock_bundle.prepare = AsyncMock(return_value=MagicMock())
 
+    if captured_paths is not None:
+
+        async def _capture_lb(path, **kwargs):
+            captured_paths.append(path)
+            return mock_bundle
+
+        lb_kwargs: dict = {"side_effect": _capture_lb}
+    else:
+        lb_kwargs = {"new_callable": AsyncMock, "return_value": mock_bundle}
+
     with (
-        patch(
-            "amplifier_foundation.load_bundle",
-            new_callable=AsyncMock,
-            return_value=mock_bundle,
-        ),
+        patch("amplifier_foundation.load_bundle", **lb_kwargs),
         patch(
             "amplifier_app_cli.session_runner.create_initialized_session",
             new_callable=AsyncMock,
@@ -83,7 +92,9 @@ def _in_process(mock_initialized):
 
 
 @contextmanager
-def _attractor_in_process(mock_initialized, *, capture_bundle_kwargs: list | None = None):
+def _attractor_in_process(
+    mock_initialized, *, capture_bundle_kwargs: list | None = None
+):
     """Patch in-process infrastructure for attractor tests.
 
     _run_attractor uses:
@@ -280,7 +291,9 @@ async def test_attractor_builds_overlay_and_executes(tmp_path):
     mock_initialized, _ = _make_mock_initialized()
     captured_bundle_kwargs: list = []
 
-    with _attractor_in_process(mock_initialized, capture_bundle_kwargs=captured_bundle_kwargs):
+    with _attractor_in_process(
+        mock_initialized, capture_bundle_kwargs=captured_bundle_kwargs
+    ):
         result = await run(
             attractor_source=str(attractor_file),
             bundle="github-tools",
@@ -290,8 +303,8 @@ async def test_attractor_builds_overlay_and_executes(tmp_path):
     assert result == 0
     mock_initialized.session.execute.assert_called_once()
     goal = mock_initialized.session.execute.call_args[0][0]
-    # No event context → goal defaults to "Run the pipeline."
-    assert goal == "Run the pipeline."
+    # No event context → goal defaults to "Triage the GitHub issue."
+    assert goal == "Triage the GitHub issue."
     # Bundle overlay carries the DOT source in the orchestrator config
     assert len(captured_bundle_kwargs) == 1
     session_cfg = captured_bundle_kwargs[0].get("session", {})
@@ -337,27 +350,8 @@ async def test_bundle_alias_github_tools_resolution(tmp_path):
     mock_initialized, _ = _make_mock_initialized()
     captured: list[str] = []
 
-    async def capture_load_bundle(path, **kwargs):
-        captured.append(path)
-        mock_bundle = MagicMock()
-        mock_bundle.prepare = AsyncMock(return_value=MagicMock())
-        return mock_bundle
-
-    with (
-        patch("amplifier_foundation.load_bundle", side_effect=capture_load_bundle),
-        patch(
-            "amplifier_app_cli.session_runner.create_initialized_session",
-            new_callable=AsyncMock,
-            return_value=mock_initialized,
-        ),
-        patch("amplifier_app_cli.console.console"),
-        patch("rich.markdown.Markdown"),
-    ):
-        await run(
-            prompt="test",
-            bundle="github-tools",
-            action_path=tmp_path,
-        )
+    with _in_process(mock_initialized, captured_paths=captured):
+        await run(prompt="test", bundle="github-tools", action_path=tmp_path)
 
     assert captured, "load_bundle must have been called"
     expected = "file://" + str(tmp_path / "bundles" / "github-tools.bundle.md")
@@ -374,27 +368,8 @@ async def test_bundle_alias_github_tools_dtu_resolution(tmp_path):
     mock_initialized, _ = _make_mock_initialized()
     captured: list[str] = []
 
-    async def capture_load_bundle(path, **kwargs):
-        captured.append(path)
-        mock_bundle = MagicMock()
-        mock_bundle.prepare = AsyncMock(return_value=MagicMock())
-        return mock_bundle
-
-    with (
-        patch("amplifier_foundation.load_bundle", side_effect=capture_load_bundle),
-        patch(
-            "amplifier_app_cli.session_runner.create_initialized_session",
-            new_callable=AsyncMock,
-            return_value=mock_initialized,
-        ),
-        patch("amplifier_app_cli.console.console"),
-        patch("rich.markdown.Markdown"),
-    ):
-        await run(
-            prompt="test",
-            bundle="github-tools-dtu",
-            action_path=tmp_path,
-        )
+    with _in_process(mock_initialized, captured_paths=captured):
+        await run(prompt="test", bundle="github-tools-dtu", action_path=tmp_path)
 
     assert captured, "load_bundle must have been called"
     expected = "file://" + str(tmp_path / "bundles" / "github-tools-dtu.bundle.md")
@@ -413,22 +388,7 @@ async def test_unknown_bundle_passthrough(tmp_path):
     mock_initialized, _ = _make_mock_initialized()
     captured: list[str] = []
 
-    async def capture_load_bundle(path, **kwargs):
-        captured.append(path)
-        mock_bundle = MagicMock()
-        mock_bundle.prepare = AsyncMock(return_value=MagicMock())
-        return mock_bundle
-
-    with (
-        patch("amplifier_foundation.load_bundle", side_effect=capture_load_bundle),
-        patch(
-            "amplifier_app_cli.session_runner.create_initialized_session",
-            new_callable=AsyncMock,
-            return_value=mock_initialized,
-        ),
-        patch("amplifier_app_cli.console.console"),
-        patch("rich.markdown.Markdown"),
-    ):
+    with _in_process(mock_initialized, captured_paths=captured):
         await run(prompt="test", bundle=custom_bundle, action_path=tmp_path)
 
     assert captured[0] == custom_bundle
@@ -444,22 +404,7 @@ async def test_enable_reproduction_promotes_default_bundle(tmp_path):
     mock_initialized, _ = _make_mock_initialized()
     captured: list[str] = []
 
-    async def capture_load_bundle(path, **kwargs):
-        captured.append(path)
-        mock_bundle = MagicMock()
-        mock_bundle.prepare = AsyncMock(return_value=MagicMock())
-        return mock_bundle
-
-    with (
-        patch("amplifier_foundation.load_bundle", side_effect=capture_load_bundle),
-        patch(
-            "amplifier_app_cli.session_runner.create_initialized_session",
-            new_callable=AsyncMock,
-            return_value=mock_initialized,
-        ),
-        patch("amplifier_app_cli.console.console"),
-        patch("rich.markdown.Markdown"),
-    ):
+    with _in_process(mock_initialized, captured_paths=captured):
         await run(
             prompt="test",
             bundle="github-tools",
@@ -481,22 +426,7 @@ async def test_explicit_bundle_not_overridden_by_enable_reproduction(tmp_path):
     mock_initialized, _ = _make_mock_initialized()
     captured: list[str] = []
 
-    async def capture_load_bundle(path, **kwargs):
-        captured.append(path)
-        mock_bundle = MagicMock()
-        mock_bundle.prepare = AsyncMock(return_value=MagicMock())
-        return mock_bundle
-
-    with (
-        patch("amplifier_foundation.load_bundle", side_effect=capture_load_bundle),
-        patch(
-            "amplifier_app_cli.session_runner.create_initialized_session",
-            new_callable=AsyncMock,
-            return_value=mock_initialized,
-        ),
-        patch("amplifier_app_cli.console.console"),
-        patch("rich.markdown.Markdown"),
-    ):
+    with _in_process(mock_initialized, captured_paths=captured):
         await run(
             prompt="test",
             bundle="github-tools-amplifier-dev",
@@ -628,22 +558,7 @@ async def test_action_path_defaults_correctly():
     mock_initialized, _ = _make_mock_initialized()
     captured: list[str] = []
 
-    async def capture_load_bundle(path, **kwargs):
-        captured.append(path)
-        mock_bundle = MagicMock()
-        mock_bundle.prepare = AsyncMock(return_value=MagicMock())
-        return mock_bundle
-
-    with (
-        patch("amplifier_foundation.load_bundle", side_effect=capture_load_bundle),
-        patch(
-            "amplifier_app_cli.session_runner.create_initialized_session",
-            new_callable=AsyncMock,
-            return_value=mock_initialized,
-        ),
-        patch("amplifier_app_cli.console.console"),
-        patch("rich.markdown.Markdown"),
-    ):
+    with _in_process(mock_initialized, captured_paths=captured):
         await run(prompt="test")
 
     assert captured, "load_bundle must have been called"
@@ -740,7 +655,9 @@ async def test_run_attractor_returns_1_on_session_error(tmp_path):
     dot_file.write_text("digraph G { A -> B; }")
 
     mock_initialized, _ = _make_mock_initialized()
-    mock_initialized.session.execute = AsyncMock(side_effect=RuntimeError("provider error"))
+    mock_initialized.session.execute = AsyncMock(
+        side_effect=RuntimeError("provider error")
+    )
 
     with _attractor_in_process(mock_initialized):
         from amplifier_app_actions.wrapper import _run_attractor
