@@ -55,7 +55,12 @@ def _normalize_recipe_path(recipe_path: str) -> tuple[str, Any]:
 
 
 _BUILT_IN_BUNDLES: frozenset[str] = frozenset(
-    {"github-tools", "github-tools-dtu", "github-tools-amplifier-dev"}
+    {
+        "github-tools",
+        "github-tools-dtu",
+        "github-tools-amplifier-dev",
+        "attractor-pipeline",   # generic DOT pipeline runner (loop-pipeline as outer orchestrator)
+    }
 )
 _DEFAULT_BUNDLE = "github-tools"
 
@@ -70,6 +75,31 @@ def _resolve_bundle_path(bundle: str, action_path: Path) -> str:
     if bundle in _BUILT_IN_BUNDLES:
         return "file://" + str(action_path / "bundles" / f"{bundle}.bundle.md")
     return bundle
+
+
+def _parse_goal(ctx_prefix: str) -> str:
+    """Extract a one-line goal string from a GitHub event context prefix.
+
+    Looks for the ``[issues: #N in owner/repo]`` header and ``Title:`` line
+    that ``format_context_block`` produces.  Falls back to a generic string
+    when the prefix is absent or unparseable.
+    """
+    import re as _re
+
+    if not ctx_prefix:
+        return "Run the pipeline."
+    m = _re.search(
+        r"\[(?P<type>issues|pull_request): #(?P<number>\d+) in (?P<owner>[^/\]]+)/(?P<repo>[^\]]+)\]",
+        ctx_prefix,
+    )
+    t = _re.search(r"Title: (.+)", ctx_prefix)
+    if m:
+        title = t.group(1).strip() if t else "Pipeline run"
+        return (
+            f"Issue #{m.group('number')} in {m.group('owner')}/{m.group('repo')}: {title}"
+            .replace('"', "'")
+        )
+    return "Run the pipeline."
 
 
 async def _create_session(
@@ -114,7 +144,6 @@ async def _create_session(
 
     initialized = await create_initialized_session(session_config, cli_console)
     return initialized, cli_console
-
 
 async def run(
     prompt: str = "",
@@ -213,10 +242,15 @@ async def run(
             cwd=action_cwd,
         )
     elif itype == InstructionType.ATTRACTOR:
+        # Attractor pipelines use a dedicated pipeline bundle (loop-pipeline as
+        # outer orchestrator) regardless of INPUT_BUNDLE. The INPUT_BUNDLE
+        # controls the tool session for prompt/recipe; the pipeline bundle
+        # controls the DOT execution session.
+        attractor_bundle = _resolve_bundle_path("attractor-pipeline", action_path)
         return await _run_attractor(
             content=content,
             ctx_prefix=ctx_prefix,
-            bundle_path=bundle_path,
+            bundle_path=attractor_bundle,
             cwd=action_cwd,
         )
     else:
@@ -229,23 +263,31 @@ async def run(
         )
 
 
-
-
 async def _run_attractor(
     content: str,
     ctx_prefix: str,
     bundle_path: str,
     cwd: str | None = None,
 ) -> int:
-    """Run an Attractor DOT pipeline via `amplifier tool invoke run_pipeline`.
+    """Run an Attractor DOT pipeline via ``amplifier run`` with a temp overlay bundle.
 
-    Delegates entirely to the amplifier CLI. create_initialized_session (called
-    internally by the CLI) wires up session.spawn via register_session_spawning(),
-    giving run_pipeline genuine AmplifierBackend — each node is a real Amplifier
-    child session with a standard orchestrator, full tool access, and proper
-    tool:pre / tool:post / llm:response hook events.
+    Why ``amplifier run`` (not ``tool invoke run_pipeline``):
+    - ``run_pipeline`` spawns ``attractor-pipeline-runner`` as a child session.
+      That agent references ``loop-pipeline`` only in its YAML config, which is
+      lazy-loaded — ``amplifier_module_loop_pipeline`` is never pip-installed, so
+      the child silently falls back to DirectProviderBackend (``nodes_completed: 0``).
+    - ``amplifier run -b attractor-pipeline.bundle.md`` makes ``loop-pipeline``
+      the OUTER session orchestrator.  The bundle-prepare step installs the module,
+      the CLI wires ``session.spawn``, and AmplifierBackend works correctly.
+
+    Overlay pattern:
+    - ``bundle_path`` is the base pipeline bundle (``attractor-pipeline.bundle.md``).
+    - The wrapper generates a tiny temp overlay that ``includes:`` the base bundle
+      and injects ``dot_source`` into ``session.orchestrator.config`` so any DOT
+      file can be used without modifying the base bundle.
     """
-    import re as _re
+    import textwrap
+    from uuid import uuid4
 
     if not Path(content).exists():
         raise FileNotFoundError(
@@ -253,31 +295,46 @@ async def _run_attractor(
             "Ensure actions/checkout is present in your workflow."
         )
 
-    goal = "Triage the GitHub issue."
-    if ctx_prefix:
-        m = _re.search(
-            r"\[(?P<type>issues|pull_request): #(?P<number>\d+) in (?P<owner>[^/\]]+)/(?P<repo>[^\]]+)\]",
-            ctx_prefix,
-        )
-        t = _re.search(r"Title: (.+)", ctx_prefix)
-        if m:
-            title = t.group(1).strip() if t else "Issue"
-            goal = f"Issue #{m.group('number')} in {m.group('owner')}/{m.group('repo')}: {title}".replace('"', "'")
+    goal = _parse_goal(ctx_prefix)
+    dot_source = Path(content).read_text(encoding="utf-8")
 
-    # Resolve dot_file to an absolute path before spawning the subprocess.
-    # The existence check above ran with the caller's CWD (repo root), but the
-    # subprocess runs with cwd=action_path.  A bare relative path like
-    # ".github/amplifier/triage-review.dot" would fail in that context.
-    dot_file_abs = str(Path(content).resolve())
+    # Indent the DOT source for embedding as a YAML block scalar.
+    # Each line must be indented 8 spaces to sit under `dot_source: |-`.
+    dot_indented = textwrap.indent(dot_source, "        ")
 
-    proc = await asyncio.create_subprocess_exec(
-        "amplifier", "tool", "invoke", "run_pipeline",
-        "-b", bundle_path,
-        f"dot_file={dot_file_abs}",
-        f"goal={goal}",
-        cwd=cwd or os.getcwd(),
+    overlay = textwrap.dedent(f"""\
+        ---
+        bundle:
+          name: attractor-run-{uuid4().hex[:8]}
+          version: 1.0.0
+        includes:
+          - bundle: {bundle_path}
+        session:
+          orchestrator:
+            config:
+              dot_source: |-
+        {dot_indented}
+        ---
+        """)
+
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".md", delete=False, encoding="utf-8"
     )
-    return await proc.wait()
+    try:
+        tmp.write(overlay)
+        tmp.flush()
+        overlay_path = tmp.name
+        tmp.close()
+
+        proc = await asyncio.create_subprocess_exec(
+            "amplifier", "run",
+            "-b", f"file://{overlay_path}",
+            goal,
+            cwd=cwd or os.getcwd(),
+        )
+        return await proc.wait()
+    finally:
+        Path(tmp.name).unlink(missing_ok=True)
 
 
 async def _run_prompt_or_attractor(

@@ -24,22 +24,6 @@ providers:
       default_model: claude-sonnet-4-6
 
 tools:
-  # Pipeline execution — required by _run_attractor() in wrapper.py.
-  # tool-pipeline-run provides the run_pipeline tool; the main attractor bundle
-  # include above does NOT bring this in (only attractor-core is loaded from it).
-  #
-  # profiles: maps provider name → agent used for each pipeline node.
-  # Anthropic is first so it becomes the fallback when no explicit provider
-  # is set on a node. Add openai/gemini entries if those providers are added.
-  - module: tool-pipeline-run
-    source: git+https://github.com/microsoft/amplifier-bundle-attractor@main#subdirectory=modules/tool-pipeline-run
-    config:
-      runner_agent: attractor-pipeline-runner
-      profiles:
-        anthropic: attractor-profile-anthropic
-        openai: attractor-profile-openai
-        gemini: attractor-profile-gemini
-
   # These tools are registered via entry points in pyproject.toml, so no
   # source: path is needed — Amplifier discovers them through the installed
   # amplifier_app_actions package (uv run --project ensures it is installed).

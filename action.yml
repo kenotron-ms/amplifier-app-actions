@@ -90,50 +90,16 @@ runs:
         sudo chmod 666 /var/lib/incus/unix.socket
         echo "::endgroup::"
 
-    - name: Run Amplifier action (prompt / recipe)
-      if: inputs.attractor_source == ''
+    - name: Run Amplifier action
       shell: bash
       env:
         INPUT_PROMPT: ${{ inputs.prompt }}
         INPUT_PROMPT_SOURCE: ${{ inputs.prompt_source }}
         INPUT_RECIPE_SOURCE: ${{ inputs.recipe_source }}
-        INPUT_ATTRACTOR_SOURCE: ''
+        INPUT_ATTRACTOR_SOURCE: ${{ inputs.attractor_source }}
         INPUT_PROVIDER: ${{ inputs.provider }}
         INPUT_MODEL: ${{ inputs.model }}
         INPUT_BUNDLE: ${{ inputs.bundle }}
         INPUT_GITHUB_TOKEN: ${{ inputs.github_token }}
         INPUT_ENABLE_REPRODUCTION: ${{ inputs.enable_reproduction }}
       run: uv run --project ${{ github.action_path }} python ${{ github.action_path }}/main.py
-
-    - name: Run Amplifier action (attractor pipeline — direct)
-      if: inputs.attractor_source != ''
-      shell: bash
-      env:
-        # Issue event data — injected via env vars (safe from shell injection)
-        ISSUE_NUMBER: ${{ github.event.issue.number }}
-        ISSUE_TITLE: ${{ github.event.issue.title }}
-        ISSUE_BODY: ${{ github.event.issue.body }}
-        ISSUE_REPO: ${{ github.repository }}
-      run: |
-        # Resolve built-in bundle aliases → file:// URIs.
-        # Arbitrary git+https:// or other URIs pass through unchanged.
-        BUNDLE="${{ inputs.bundle }}"
-        case "$BUNDLE" in
-          github-tools|github-tools-dtu|github-tools-amplifier-dev|triage-safe)
-            BUNDLE="file://${{ github.action_path }}/bundles/${BUNDLE}.bundle.md"
-            ;;
-        esac
-
-        # Build the goal string from event fields.
-        # $'\n\n' gives a literal double-newline without subshell.
-        GOAL="Issue #${ISSUE_NUMBER} in ${ISSUE_REPO}: ${ISSUE_TITLE}"
-        [ -n "${ISSUE_BODY}" ] && GOAL="${GOAL}"$'\n\n'"${ISSUE_BODY}"
-
-        # Invoke the pipeline directly — no intermediate Python process.
-        # This gives run_pipeline a top-level CLI session where session.spawn
-        # works at full depth, so AmplifierBackend can spawn per-node child
-        # sessions for investigate, quality_eval, comment_draft, etc.
-        uv run --project ${{ github.action_path }} amplifier tool invoke run_pipeline \
-          -b "${BUNDLE}" \
-          "dot_file=${GITHUB_WORKSPACE}/${{ inputs.attractor_source }}" \
-          "goal=${GOAL}"
