@@ -36,6 +36,7 @@ unified-llm-client = { git = "https://github.com/microsoft/amplifier-bundle-attr
 
 [tool.hatch.build.targets.wheel]
 packages = ["amplifier_app_actions"]
+include = ["bundles/**"]
 
 [tool.hatch.metadata]
 allow-direct-references = true

@@ -9,13 +9,18 @@
 #   - report node calls github_post_comment with findings
 #
 # Prerequisites:
-#   1. Run host setup to start Gitea and mirror the action repo.
-#   2. ANTHROPIC_API_KEY must be set on the host.
+#   1. Start Gitea: amplifier-gitea create (or reuse an existing instance).
+#   2. Mirror amplifier-app-actions to Gitea (push local main branch).
+#   3. ANTHROPIC_API_KEY must be set on the host.
 #
 # Launch:
 #   amplifier-digital-twin launch validate-attractor.yaml \
-#     --var GITEA_URL=$GITEA_URL \
-#     --var GITEA_TOKEN=$GITEA_TOKEN
+#     --var GITEA_URL=http://localhost:3030 \
+#     --var GITEA_TOKEN=$(amplifier-gitea token <id> | jq -r .token)
+#
+# Note: GITEA_URL uses localhost:3030; the DTU auto-rewrites localhost to the
+# host gateway IP (192.168.100.1) so containers can reach the Docker Gitea.
+# Install uses the Gitea URL directly to avoid mitmproxy HTTPS→HTTP issues.
 
 name: validate-attractor
 description: >
@@ -30,16 +35,10 @@ base:
 vars:
   - name: GITEA_URL
     required: true
-    description: "Host Gitea base URL, e.g. http://10.86.0.1:10210"
+    description: "Host Gitea base URL (use localhost; DTU auto-rewrites for container access)"
   - name: GITEA_TOKEN
     required: true
     description: "Gitea admin API token"
-  - name: core_ref
-    default: ""
-    description: "amplifier-core ref override (empty = use published PyPI)"
-  - name: foundation_ref
-    default: ""
-    description: "amplifier-foundation ref override (empty = use GitHub main)"
 
 passthrough:
   allow_external: true
@@ -47,49 +46,16 @@ passthrough:
     - name: anthropic
       key_env: ANTHROPIC_API_KEY
 
-url_rewrites:
-  auth:
-    username: admin
-    token_var: GITEA_TOKEN
-  # Keep uv's GitHub fast path disabled so `uv tool install` routes through
-  # git fetch and these rules actually apply. See docs/profiles.md for the
-  # reasoning.
-  allow_uv_github_fast_path: false
-  default_match_mode: boundary
-  rules:
-    # Redirect action repo installs to local Gitea mirror
-    - match: github.com/microsoft/amplifier-app-actions
-      target: ${GITEA_URL}/admin/amplifier-app-actions
-    - match: github.com/microsoft/amplifier-foundation
-      target: ${GITEA_URL}/admin/amplifier-foundation
-
 # ---------------------------------------------------------------------------
-# Generic dependency override pattern
+# Optional amplifier-core override (not active by default)
 #
-# core_ref and foundation_ref are Amplifier-specific examples. Any `*_ref`
-# var can point to a Gitea-mirrored dependency. When the ref is empty
-# (default), the published PyPI version is used instead.
+# To test with a local amplifier-core build:
+#   1. Mirror local amplifier-core to Gitea.
+#   2. Add pypi_overrides with wheel_from_git using localhost:3030 as the
+#      repo URL (DTU handles the host→container IP rewrite for pypi_overrides).
 #
-# Usage: mirror local code first, then pass the ref at launch time:
-#   amplifier-gitea mirror-from-local ~/repos/amplifier-core \
-#     --to admin/amplifier-core
-#   amplifier-digital-twin launch validate-attractor.yaml \
-#     --var GITEA_URL=$GITEA_URL \
-#     --var GITEA_TOKEN=$GITEA_TOKEN \
-#     --var core_ref=main
-#
-# When core_ref is empty (default), the published PyPI version is used.
+# By default (no pypi_overrides), published PyPI amplifier-core is used.
 # ---------------------------------------------------------------------------
-pypi_overrides:
-  packages:
-    - name: amplifier-core
-      wheel_from_git:
-        repo: ${GITEA_URL}/admin/amplifier-core.git
-        ref: ${core_ref}
-        username: admin
-        token_var: GITEA_TOKEN
-        build_cmd: uv build --wheel
-        wheel_glob: dist/amplifier_core-*.whl
 
 provision:
   setup_cmds:
@@ -137,12 +103,21 @@ provision:
       echo "Labels created"
 
     # --- Install amplifier-app-actions from local Gitea mirror ---
+    # Use the Gitea URL directly to avoid mitmproxy HTTPS→HTTP redirect issues.
+    # ${GITEA_URL} is auto-rewritten from localhost:3030 to 192.168.100.1:3030
+    # inside the container so it is reachable from the Incus network.
     - |
-      export PATH="/root/.local/bin:$PATH"
+      set -e
+      # Store Gitea credentials for git
+      git config --global credential.helper store
+      printf 'http://admin:%s@%s\n' "${GITEA_TOKEN}" "${GITEA_URL#http://}" \
+        >> /root/.git-credentials
 
-      # url_rewrites redirects this clone to ${GITEA_URL}/admin/amplifier-app-actions
+      # Install directly from Gitea (HTTP) — avoids the GitHub fast path and
+      # mitmproxy protocol issues.  Transitive deps (amplifier-foundation,
+      # amplifier-app-cli, etc.) are fetched from GitHub via internet passthrough.
       uv tool install -vv \
-        "git+https://github.com/microsoft/amplifier-app-actions"
+        "git+${GITEA_URL}/admin/amplifier-app-actions.git"
 
       amplifier-triage --help
       echo "amplifier-triage installed successfully"
@@ -191,9 +166,7 @@ provision:
 
     # --- Run the action in attractor mode ---
     - |
-      export PATH="/root/.local/bin:$PATH"
       set -e
-
       GITHUB_API_URL="${GITEA_URL}/api/v1" \
       GITHUB_CLONE_URL="${GITEA_URL}" \
       GITHUB_TOKEN="${GITEA_TOKEN}" \
