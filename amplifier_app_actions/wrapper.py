@@ -376,7 +376,12 @@ async def _run_attractor(
         overlay = Bundle(
             name="attractor-overlay",
             version="1.0.0",
-            session={"orchestrator": {"config": {"dot_source": dot_source}}},
+            session={
+                "orchestrator": {
+                    "module": "loop-pipeline",
+                    "config": {"dot_source": dot_source},
+                }
+            },
         )
         composed = base_bundle.compose(overlay)
         prepared = await composed.prepare()

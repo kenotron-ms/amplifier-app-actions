@@ -13,6 +13,8 @@ digraph triage {
   label="Issue Triage Attractor (DTU Test)"
   rankdir=TB
 
+  start [shape=Mdiamond, label="Start"]
+
   classify [
     label="Classify Issue",
     description="Read the issue title and body. Determine the type (bug, feature-request, question, documentation) and severity. Add the appropriate label using github_add_label. Output: classification summary."
@@ -23,5 +25,9 @@ digraph triage {
     description="Using the classification from the previous step, post a structured triage comment using github_post_comment. Include: type, severity, one-sentence summary, and recommended next action."
   ]
 
+  end [shape=Msquare, label="End"]
+
+  start -> classify
   classify -> report
+  report -> end
 }

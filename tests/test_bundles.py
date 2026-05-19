@@ -33,53 +33,56 @@ def _include_bundles(fm: dict) -> list[str]:
     return [i.get("bundle", "") for i in (fm.get("includes") or [])]
 
 
+def _provider_modules(fm: dict) -> list[str]:
+    return [p.get("module", "") for p in (fm.get("providers") or [])]
+
+
 # ---------------------------------------------------------------------------
 # File existence
 # ---------------------------------------------------------------------------
 
 
-def test_triage_safe_bundle_exists():
-    """bundles/triage-safe.bundle.md must exist."""
-    assert (_BUNDLES_DIR / "triage-safe.bundle.md").exists()
+def test_github_tools_bundle_exists():
+    """bundles/github-tools.bundle.md must exist."""
+    assert (_BUNDLES_DIR / "github-tools.bundle.md").exists()
 
 
-def test_triage_repro_bundle_exists():
-    """bundles/triage-repro.bundle.md must exist."""
-    assert (_BUNDLES_DIR / "triage-repro.bundle.md").exists()
+def test_github_tools_dtu_bundle_exists():
+    """bundles/github-tools-dtu.bundle.md must exist."""
+    assert (_BUNDLES_DIR / "github-tools-dtu.bundle.md").exists()
 
 
-def test_triage_amplifier_bundle_exists():
-    """bundles/triage-amplifier.bundle.md must exist."""
-    assert (_BUNDLES_DIR / "triage-amplifier.bundle.md").exists()
+def test_github_tools_amplifier_dev_bundle_exists():
+    """bundles/github-tools-amplifier-dev.bundle.md must exist."""
+    assert (_BUNDLES_DIR / "github-tools-amplifier-dev.bundle.md").exists()
 
 
 # ---------------------------------------------------------------------------
-# triage-safe: includes foundation, local tools, no fat overrides
+# github-tools: base tier — includes foundation, local tools, explicit provider
 # ---------------------------------------------------------------------------
 
 
-def test_triage_safe_includes_foundation():
-    """triage-safe.bundle.md must include amplifier-foundation."""
-    fm = _parse_frontmatter(_BUNDLES_DIR / "triage-safe.bundle.md")
+def test_github_tools_includes_foundation():
+    """github-tools.bundle.md must include amplifier-foundation."""
+    fm = _parse_frontmatter(_BUNDLES_DIR / "github-tools.bundle.md")
     includes = _include_bundles(fm)
     assert any("amplifier-foundation" in inc for inc in includes), (
-        "triage-safe must include amplifier-foundation"
+        "github-tools must include amplifier-foundation"
     )
 
 
-def test_triage_safe_has_all_three_github_tools():
-    """triage-safe.bundle.md must declare the three local GitHub tools."""
-    fm = _parse_frontmatter(_BUNDLES_DIR / "triage-safe.bundle.md")
+def test_github_tools_has_all_three_github_tools():
+    """github-tools.bundle.md must declare the three local GitHub tools."""
+    fm = _parse_frontmatter(_BUNDLES_DIR / "github-tools.bundle.md")
     modules = _tool_modules(fm)
     assert "tool-github-post-comment" in modules
     assert "tool-github-add-label" in modules
     assert "tool-github-checkout-repo" in modules
 
 
-
-def test_triage_safe_github_tools_use_entry_points():
-    """GitHub tools in triage-safe must NOT have a source: path (they use entry points)."""
-    fm = _parse_frontmatter(_BUNDLES_DIR / "triage-safe.bundle.md")
+def test_github_tools_use_entry_points():
+    """GitHub tools in github-tools must NOT have a source: path (they use entry points)."""
+    fm = _parse_frontmatter(_BUNDLES_DIR / "github-tools.bundle.md")
     tools = {t.get("module", ""): t for t in (fm.get("tools") or [])}
     for name in [
         "tool-github-post-comment",
@@ -91,86 +94,87 @@ def test_triage_safe_github_tools_use_entry_points():
         )
 
 
-def test_triage_safe_no_session_override():
-    """triage-safe.bundle.md must NOT declare a session: block (fat bundle anti-pattern)."""
-    fm = _parse_frontmatter(_BUNDLES_DIR / "triage-safe.bundle.md")
+def test_github_tools_no_session_override():
+    """github-tools.bundle.md must NOT declare a session: block (fat bundle anti-pattern)."""
+    fm = _parse_frontmatter(_BUNDLES_DIR / "github-tools.bundle.md")
     assert "session" not in fm, (
-        "triage-safe must not override session (use foundation defaults)"
+        "github-tools must not override session (use foundation defaults)"
     )
 
 
-def test_triage_safe_no_providers_override():
-    """triage-safe.bundle.md must NOT declare a providers: block (fat bundle anti-pattern)."""
-    fm = _parse_frontmatter(_BUNDLES_DIR / "triage-safe.bundle.md")
-    assert "providers" not in fm, (
-        "triage-safe must not override providers (use foundation defaults)"
+def test_github_tools_has_explicit_provider():
+    """github-tools.bundle.md must declare provider-anthropic for in-process session creation."""
+    fm = _parse_frontmatter(_BUNDLES_DIR / "github-tools.bundle.md")
+    providers = _provider_modules(fm)
+    assert "provider-anthropic" in providers, (
+        "github-tools must declare provider-anthropic "
+        "(required for in-process session creation via _create_session)"
     )
 
 
 # ---------------------------------------------------------------------------
-# triage-repro: includes triage-safe + digital-twin-universe
+# github-tools-dtu: extends github-tools with Digital Twin Universe
 # ---------------------------------------------------------------------------
 
 
-def test_triage_repro_includes_triage_safe():
-    """triage-repro.bundle.md must include the triage-safe bundle."""
-    fm = _parse_frontmatter(_BUNDLES_DIR / "triage-repro.bundle.md")
+def test_github_tools_dtu_includes_github_tools():
+    """github-tools-dtu.bundle.md must include the github-tools bundle."""
+    fm = _parse_frontmatter(_BUNDLES_DIR / "github-tools-dtu.bundle.md")
     includes = _include_bundles(fm)
-    assert any("triage-safe" in inc for inc in includes), (
-        "triage-repro must include triage-safe"
+    assert any("github-tools" in inc for inc in includes), (
+        "github-tools-dtu must include github-tools"
     )
 
 
-def test_triage_repro_includes_digital_twin_universe():
-    """triage-repro.bundle.md must include amplifier-bundle-digital-twin-universe."""
-    fm = _parse_frontmatter(_BUNDLES_DIR / "triage-repro.bundle.md")
+def test_github_tools_dtu_includes_digital_twin_universe():
+    """github-tools-dtu.bundle.md must include amplifier-bundle-digital-twin-universe."""
+    fm = _parse_frontmatter(_BUNDLES_DIR / "github-tools-dtu.bundle.md")
     includes = _include_bundles(fm)
     assert any("digital-twin-universe" in inc for inc in includes), (
-        "triage-repro must include digital-twin-universe"
+        "github-tools-dtu must include digital-twin-universe"
     )
 
 
-
-def test_triage_repro_no_session_override():
-    """triage-repro.bundle.md must NOT declare a session: block."""
-    fm = _parse_frontmatter(_BUNDLES_DIR / "triage-repro.bundle.md")
+def test_github_tools_dtu_no_session_override():
+    """github-tools-dtu.bundle.md must NOT declare a session: block."""
+    fm = _parse_frontmatter(_BUNDLES_DIR / "github-tools-dtu.bundle.md")
     assert "session" not in fm
 
 
-def test_triage_repro_no_providers_override():
-    """triage-repro.bundle.md must NOT declare a providers: block."""
-    fm = _parse_frontmatter(_BUNDLES_DIR / "triage-repro.bundle.md")
+def test_github_tools_dtu_no_providers_override():
+    """github-tools-dtu.bundle.md must NOT declare a providers: block."""
+    fm = _parse_frontmatter(_BUNDLES_DIR / "github-tools-dtu.bundle.md")
     assert "providers" not in fm
 
 
 # ---------------------------------------------------------------------------
-# triage-amplifier: includes triage-repro
+# github-tools-amplifier-dev: extends github-tools-dtu with Amplifier dev tooling
 # ---------------------------------------------------------------------------
 
 
-def test_triage_amplifier_includes_triage_repro():
-    """triage-amplifier.bundle.md must include the triage-repro bundle."""
-    fm = _parse_frontmatter(_BUNDLES_DIR / "triage-amplifier.bundle.md")
+def test_github_tools_amplifier_dev_includes_dtu():
+    """github-tools-amplifier-dev.bundle.md must include the github-tools-dtu bundle."""
+    fm = _parse_frontmatter(_BUNDLES_DIR / "github-tools-amplifier-dev.bundle.md")
     includes = _include_bundles(fm)
-    assert any("triage-repro" in inc for inc in includes), (
-        "triage-amplifier must include triage-repro"
+    assert any("github-tools-dtu" in inc for inc in includes), (
+        "github-tools-amplifier-dev must include github-tools-dtu"
     )
 
 
-def test_triage_amplifier_no_launch_dtu():
-    """triage-amplifier.bundle.md must NOT declare tool-launch-dtu."""
-    fm = _parse_frontmatter(_BUNDLES_DIR / "triage-amplifier.bundle.md")
+def test_github_tools_amplifier_dev_no_launch_dtu():
+    """github-tools-amplifier-dev.bundle.md must NOT declare tool-launch-dtu."""
+    fm = _parse_frontmatter(_BUNDLES_DIR / "github-tools-amplifier-dev.bundle.md")
     modules = _tool_modules(fm)
     assert "tool-launch-dtu" not in modules
 
 
-def test_triage_amplifier_no_session_override():
-    """triage-amplifier.bundle.md must NOT declare a session: block."""
-    fm = _parse_frontmatter(_BUNDLES_DIR / "triage-amplifier.bundle.md")
+def test_github_tools_amplifier_dev_no_session_override():
+    """github-tools-amplifier-dev.bundle.md must NOT declare a session: block."""
+    fm = _parse_frontmatter(_BUNDLES_DIR / "github-tools-amplifier-dev.bundle.md")
     assert "session" not in fm
 
 
-def test_triage_amplifier_no_providers_override():
-    """triage-amplifier.bundle.md must NOT declare a providers: block."""
-    fm = _parse_frontmatter(_BUNDLES_DIR / "triage-amplifier.bundle.md")
+def test_github_tools_amplifier_dev_no_providers_override():
+    """github-tools-amplifier-dev.bundle.md must NOT declare a providers: block."""
+    fm = _parse_frontmatter(_BUNDLES_DIR / "github-tools-amplifier-dev.bundle.md")
     assert "providers" not in fm

@@ -29,11 +29,15 @@ def test_description_length_greater_than_10():
     assert len(tool.description) > 10
 
 
-def test_input_schema_requires_4_fields():
-    """input_schema.required contains exactly the 4 expected fields."""
+def test_input_schema_required_fields():
+    """input_schema.required contains exactly owner, repo, body.
+
+    issue_number is intentionally optional — when comment_id is supplied the
+    tool updates an existing comment and does not need issue_number.
+    """
     tool = GitHubPostCommentTool({"github_token": "test-token"})
     required = tool.input_schema.get("required", [])
-    assert set(required) == {"owner", "repo", "issue_number", "body"}
+    assert set(required) == {"owner", "repo", "body"}
 
 
 # ---------------------------------------------------------------------------
