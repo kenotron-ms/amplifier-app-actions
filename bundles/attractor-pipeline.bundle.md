@@ -34,6 +34,13 @@ session:
     module: context-simple
     source: git+https://github.com/microsoft/amplifier-module-context-simple@main
 
+# Pipeline progress hook — emits [PIPELINE] log lines for every node start,
+# node complete, edge selected, and provider response. Gives real-time
+# visibility into investigate/quality_eval cycles in GH Actions logs.
+hooks:
+  - module: hooks-pipeline-progress
+    source: git+https://github.com/microsoft/amplifier-bundle-attractor@main#subdirectory=modules/hooks-pipeline-progress
+
 # Orchestrator-level tools (used for pipeline management, not child sessions)
 tools:
   - module: tool-filesystem

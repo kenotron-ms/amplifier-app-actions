@@ -411,6 +411,18 @@ async def _run_attractor(
     )
     initialized = await create_initialized_session(session_config, cli_console)
 
+    # Route pipeline progress hook logs to stdout so GH Actions logs show
+    # [PIPELINE] ▶ node_start / ✓ node_complete / -> edge lines in real-time.
+    import logging as _logging
+    import sys as _sys
+    _ph_log = _logging.getLogger("amplifier_module_hooks_pipeline_progress")
+    if not _ph_log.handlers:
+        _h = _logging.StreamHandler(_sys.stdout)
+        _h.setFormatter(_logging.Formatter("%(message)s"))
+        _ph_log.addHandler(_h)
+    _ph_log.setLevel(_logging.DEBUG)
+    _ph_log.propagate = False
+
     try:
         # Override the CLI's standard session.spawn with one backed by
         # prepared.spawn() so loop-pipeline's _build_backend() picks
