@@ -95,8 +95,8 @@ agents:
         module: loop-agent
         source: git+https://github.com/microsoft/amplifier-bundle-attractor@main#subdirectory=modules/loop-agent
         config:
-          max_tool_rounds_per_input: 20
-          default_command_timeout_ms: 60000
+          max_tool_rounds_per_input: 50
+          default_command_timeout_ms: 120000
       context:
         module: context-simple
         source: git+https://github.com/microsoft/amplifier-module-context-simple@main
@@ -106,6 +106,18 @@ agents:
         config:
           default_model: claude-sonnet-4-6
     tools:
+      # Same investigation tools as pipeline-agent-anthropic so the commenter
+      # can re-verify findings in code before writing the final comment.
+      - module: tool-filesystem
+        source: git+https://github.com/microsoft/amplifier-module-tool-filesystem@main
+      - module: tool-bash
+        source: git+https://github.com/microsoft/amplifier-module-tool-bash@main
+        config:
+          timeout: 120
+      - module: tool-search
+        source: git+https://github.com/microsoft/amplifier-module-tool-search@main
+      - module: tool-github-checkout-repo
+      # Plus posting capability — the only thing investigate must not have.
       - module: tool-github-post-comment
       - module: tool-github-add-label
 ---

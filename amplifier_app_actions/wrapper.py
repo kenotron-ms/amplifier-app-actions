@@ -166,7 +166,7 @@ def _register_spawn_capability(session: Any, prepared: Any) -> None:
         )
         output = (result or {}).get("output") or (result or {}).get("response") or ""
         if output:
-            print(f"\n[{agent_name} output]\n{str(output)[:2000]}", flush=True)
+            print(f"\n[{agent_name} output]\n{str(output)}", flush=True)
         return result
 
     session.coordinator.register_capability("session.spawn", spawn_capability)
