@@ -49,6 +49,16 @@ tools:
 # Full tool set: base coding tools + GitHub API tools.
 agents:
   pipeline-agent-anthropic:
+    # Guard against investigation nodes calling github_post_comment unprompted.
+    # Only the comment_draft node's prompt explicitly says "post it to that issue
+    # using github_post_comment" — that phrase is the authorisation signal.
+    instruction: >
+      You are a pipeline node agent. You have access to GitHub tools including
+      github_post_comment. CRITICAL RULE: Do NOT call github_post_comment or
+      post anything to GitHub unless your task prompt contains the exact phrase
+      "post it to that issue using github_post_comment". Report all findings as
+      text output only. Calling github_post_comment without that explicit
+      instruction will create duplicate comments on the issue.
     session:
       orchestrator:
         module: loop-agent
