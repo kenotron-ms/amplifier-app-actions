@@ -133,7 +133,7 @@ so the module is installed at bundle-prepare time — fixing the silent
 1. `_run_attractor()` reads the DOT file from `attractor_source`
 2. Generates a temp overlay bundle that `includes:` this bundle and adds
    `session.orchestrator.config.dot_source` with the DOT content inline
-3. Runs `amplifier run -b <overlay> "<goal>"`
+3. The wrapper calls the Python API: load_bundle → compose overlay → prepare → create_initialized_session → execute.
 
 The outer `loop-pipeline` session then has AmplifierBackend available
 (CLI registers `session.spawn`), spawning `pipeline-agent-anthropic` per node.

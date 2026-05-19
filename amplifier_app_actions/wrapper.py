@@ -1,10 +1,4 @@
-"""Amplifier session runner — creates and executes sessions in-process.
-
-Uses amplifier_app_cli.session_runner.create_initialized_session as the
-single entry point for all session creation, avoiding subprocess overhead
-and the Session-not-found false-positive exit code that subprocess mode
-triggered (amplifier-app-cli bug: execute_single calls store.get_metadata()
-before store.save(), which raises FileNotFoundError for brand-new sessions).
+"""Amplifier session runner — creates and executes sessions in-process via create_initialized_session.
 
 Design notes:
   - Prompt/attractor: create_initialized_session → session.execute(prompt)
@@ -68,9 +62,9 @@ _DEFAULT_BUNDLE = "github-tools"
 def _resolve_bundle_path(bundle: str, action_path: Path) -> str:
     """Resolve a built-in bundle alias to a file:// URI.
 
-    Built-in aliases (triage-safe, triage-repro, triage-amplifier) resolve
-    to ``action_path/bundles/<alias>.bundle.md``.  Any other value is returned
-    unchanged so callers can pass arbitrary local or remote paths.
+    Built-in aliases (github-tools, github-tools-dtu, github-tools-amplifier-dev,
+    attractor-pipeline) resolve to ``action_path/bundles/<alias>.bundle.md``.
+    Any other value is returned unchanged so callers can pass arbitrary local or remote paths.
     """
     if bundle in _BUILT_IN_BUNDLES:
         return "file://" + str(action_path / "bundles" / f"{bundle}.bundle.md")
@@ -228,7 +222,6 @@ async def run(
     event_path: str = "",
     enable_reproduction: bool = False,
     action_path: Path | None = None,
-    amplifier_bin: str = "amplifier",  # kept for API compat, unused in in-process mode
 ) -> int:
     """Create an Amplifier session in-process and execute the instruction.
 
@@ -249,21 +242,19 @@ async def run(
         Model name override.  Currently informational — the bundle specifies the
         model; explicit override support is a TODO.
     bundle:
-        Bundle alias ('triage-safe', 'triage-repro', 'triage-amplifier') or
-        any path/URL.  Aliases are resolved relative to action_path.
+        Bundle alias ('github-tools', 'github-tools-dtu', 'github-tools-amplifier-dev',
+        'attractor-pipeline') or any path/URL.  Aliases are resolved relative to action_path.
     github_token:
         GitHub token to inject into GITHUB_TOKEN env via setdefault.
     event_path:
         Path to the GitHub event JSON file.  When it exists the event is
         parsed and a context block is prepended to the prompt.
     enable_reproduction:
-        When True and bundle is the default ('triage-safe'), upgrade to
-        'triage-repro' (which includes digital-twin-universe).
+        When True and bundle is the default ('github-tools'), upgrade to
+        'github-tools-dtu' (which includes digital-twin-universe).
     action_path:
         Repository root for resolving built-in bundle aliases.  Defaults to
         the parent directory of this package.
-    amplifier_bin:
-        Ignored — kept for backward-compatible call sites.
 
     Returns
     -------
@@ -342,23 +333,8 @@ async def _run_attractor(
 ) -> int:
     """Run an Attractor DOT pipeline in-process via the Python API (Path B).
 
-    Why in-process Python API (not ``amplifier run -B bundle``):
-    - ``amplifier run`` ignores ``session.orchestrator.module`` from the bundle;
-      it always drives the session with its own built-in agent loop regardless
-      of what the bundle declares.  Every test showed flat-agent behaviour.
-    - The Python API (``load_bundle`` → compose overlay → ``create_session``) IS
-      the supported path for custom orchestrators, per APP-INTEGRATION-GUIDE.
-
-    Why ``_register_spawn_capability`` must be called on THIS session:
-    - ``create_initialized_session`` wires the CLI's standard ``session.spawn``
-      (``register_session_spawning``), but that uses ``spawn_sub_session`` which
-      does NOT install agent bundle modules.  When ``loop-pipeline`` tries to
-      spawn per-node child sessions via that capability, the grandchildren
-      succeed, but our earlier attempts registered on the wrong (outer) session.
-    - Here we register AFTER ``create_initialized_session``, overriding with a
-      ``prepared.spawn()``-based capability on the session whose orchestrator IS
-      ``loop-pipeline``.  ``_build_backend()`` then finds ``session.spawn`` →
-      ``AmplifierBackend`` → per-node child sessions → ``nodes_completed > 0``.
+    Uses the Python API (load_bundle → compose → prepare → create_initialized_session).
+    spawn_capability must be registered on the loop-pipeline session directly.
     """
     from amplifier_app_cli.console import console as cli_console
     from amplifier_app_cli.session_runner import (

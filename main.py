@@ -17,7 +17,7 @@ def main() -> None:
             attractor_source=os.getenv("INPUT_ATTRACTOR_SOURCE", ""),
             provider=os.getenv("INPUT_PROVIDER", "anthropic"),
             model=os.getenv("INPUT_MODEL", ""),
-            bundle=os.getenv("INPUT_BUNDLE", "triage-safe"),
+            bundle=os.getenv("INPUT_BUNDLE", "github-tools"),
             github_token=os.getenv("INPUT_GITHUB_TOKEN", os.getenv("GITHUB_TOKEN", "")),
             event_path=os.getenv("GITHUB_EVENT_PATH", ""),
             enable_reproduction=os.getenv("INPUT_ENABLE_REPRODUCTION", "").lower()

@@ -5,7 +5,7 @@ bundle:
 
 includes:
   # Compose the base tier.
-  # Path is relative to the action root (wrapper.py sets cwd=action_path for the subprocess).
+  # Path is relative to the action root (wrapper.py sets cwd=action_path).
   - bundle: ./bundles/github-tools.bundle.md
   # Add DTU infrastructure — dtu-profile-builder agent, amplifier-digital-twin CLI
   - bundle: git+https://github.com/microsoft/amplifier-bundle-digital-twin-universe@main
