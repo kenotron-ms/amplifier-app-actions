@@ -328,7 +328,7 @@ async def _run_attractor(
 
         proc = await asyncio.create_subprocess_exec(
             "amplifier", "run",
-            "-b", f"file://{overlay_path}",
+            "-B", f"file://{overlay_path}",
             goal,
             cwd=cwd or os.getcwd(),
         )
