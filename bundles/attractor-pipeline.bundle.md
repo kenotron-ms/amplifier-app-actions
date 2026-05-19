@@ -30,6 +30,7 @@ session:
     config:
       profiles:
         anthropic: pipeline-agent-anthropic
+        anthropic-commenter: pipeline-agent-commenter
   context:
     module: context-simple
     source: git+https://github.com/microsoft/amplifier-module-context-simple@main
@@ -52,20 +53,15 @@ tools:
   - module: tool-search
     source: git+https://github.com/microsoft/amplifier-module-tool-search@main
 
-# Child agent spawned per DOT node by AmplifierBackend.
-# Full tool set: base coding tools + GitHub API tools.
+# Two child agent profiles:
+#   pipeline-agent-anthropic  — investigation nodes (NO github_post_comment)
+#   pipeline-agent-commenter  — comment_draft only (WITH github_post_comment)
+#
+# DOT usage: add  llm_provider="anthropic-commenter"  on the comment_draft node
+# to select the commenter profile. All other nodes default to "anthropic" →
+# pipeline-agent-anthropic, which cannot post to GitHub.
 agents:
   pipeline-agent-anthropic:
-    # Guard against investigation nodes calling github_post_comment unprompted.
-    # Only the comment_draft node's prompt explicitly says "post it to that issue
-    # using github_post_comment" — that phrase is the authorisation signal.
-    instruction: >
-      You are a pipeline node agent. You have access to GitHub tools including
-      github_post_comment. CRITICAL RULE: Do NOT call github_post_comment or
-      post anything to GitHub unless your task prompt contains the exact phrase
-      "post it to that issue using github_post_comment". Report all findings as
-      text output only. Calling github_post_comment without that explicit
-      instruction will create duplicate comments on the issue.
     session:
       orchestrator:
         module: loop-agent
@@ -90,11 +86,28 @@ agents:
           timeout: 120
       - module: tool-search
         source: git+https://github.com/microsoft/amplifier-module-tool-search@main
-      # GitHub tools — no source: needed, discovered via entry points from
-      # the installed amplifier_app_actions package (same Python environment).
-      - module: tool-github-post-comment
       - module: tool-github-add-label
       - module: tool-github-checkout-repo
+
+  pipeline-agent-commenter:
+    session:
+      orchestrator:
+        module: loop-agent
+        source: git+https://github.com/microsoft/amplifier-bundle-attractor@main#subdirectory=modules/loop-agent
+        config:
+          max_tool_rounds_per_input: 20
+          default_command_timeout_ms: 60000
+      context:
+        module: context-simple
+        source: git+https://github.com/microsoft/amplifier-module-context-simple@main
+    providers:
+      - module: provider-anthropic
+        source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
+        config:
+          default_model: claude-sonnet-4-6
+    tools:
+      - module: tool-github-post-comment
+      - module: tool-github-add-label
 ---
 
 # attractor-pipeline Bundle
