@@ -267,13 +267,27 @@ def _register_spawn_capability(session: Any, prepared: Any) -> None:
             # DirectProviderBackend — no tools, so github_post_comment is never called.
             config = {}
 
+        # Add hooks-streaming-ui so each node session logs tool calls, thinking
+        # blocks, and LLM responses to stdout — same style as amplifier-app-cli.
+        # The module is already importable (comes in via amplifier-foundation),
+        # so no extra dep is needed. show_tool_lines=500 avoids truncation.
+        streaming_ui_hook = {
+            "module": "hooks-streaming-ui",
+            "config": {
+                "ui": {
+                    "show_thinking_stream": True,
+                    "show_tool_lines": 500,
+                    "show_token_usage": True,
+                }
+            },
+        }
         child_bundle = Bundle(
             name=agent_name,
             version="1.0.0",
             session=config.get("session", {}),
             providers=config.get("providers", []),
             tools=config.get("tools", []),
-            hooks=config.get("hooks", []),
+            hooks=[*config.get("hooks", []), streaming_ui_hook],
             instruction=(
                 config.get("instruction") or config.get("system", {}).get("instruction")
             ),
