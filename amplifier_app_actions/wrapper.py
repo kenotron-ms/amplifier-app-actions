@@ -59,7 +59,7 @@ _BUILT_IN_BUNDLES: frozenset[str] = frozenset(
         "github-tools",
         "github-tools-dtu",
         "github-tools-amplifier-dev",
-        "attractor-pipeline",   # generic DOT pipeline runner (loop-pipeline as outer orchestrator)
+        "attractor-pipeline",  # generic DOT pipeline runner (loop-pipeline as outer orchestrator)
     }
 )
 _DEFAULT_BUNDLE = "github-tools"
@@ -95,11 +95,69 @@ def _parse_goal(ctx_prefix: str) -> str:
     t = _re.search(r"Title: (.+)", ctx_prefix)
     if m:
         title = t.group(1).strip() if t else "Pipeline run"
-        return (
-            f"Issue #{m.group('number')} in {m.group('owner')}/{m.group('repo')}: {title}"
-            .replace('"', "'")
+        return f"Issue #{m.group('number')} in {m.group('owner')}/{m.group('repo')}: {title}".replace(
+            '"', "'"
         )
     return "Run the pipeline."
+
+
+def _register_spawn_capability(session: Any, prepared: Any) -> None:
+    """Register ``session.spawn`` so ``loop-pipeline`` selects AmplifierBackend.
+
+    This is the required wiring step from the attractor APP-INTEGRATION-GUIDE
+    (Path B).  Without it, ``_build_backend()`` in ``loop-pipeline`` does not
+    find ``session.spawn`` and falls back to ``DirectProviderBackend`` — all
+    nodes run inline in one session and ``nodes_completed`` stays 0.
+
+    Must be called on the SESSION WHOSE ORCHESTRATOR IS ``loop-pipeline``, not
+    on a parent session.  That is what makes the difference vs the earlier
+    failed attempts that registered on the wrong (github-tools) session.
+
+    Pattern from: amplifier-bundle-attractor/docs/APP-INTEGRATION-GUIDE.md
+    """
+    from amplifier_foundation import Bundle
+
+    async def spawn_capability(
+        agent_name: str,
+        instruction: str,
+        parent_session: Any,
+        agent_configs: dict[str, Any],
+        sub_session_id: str | None = None,
+        orchestrator_config: dict[str, Any] | None = None,
+        parent_messages: list[dict[str, Any]] | None = None,
+        provider_preferences: list | None = None,
+        self_delegation_depth: int = 0,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        config: dict[str, Any] = {}
+        if agent_name in agent_configs:
+            config = agent_configs[agent_name]
+        elif hasattr(prepared, "bundle") and agent_name in (
+            prepared.bundle.agents or {}
+        ):
+            config = prepared.bundle.agents[agent_name]
+
+        child_bundle = Bundle(
+            name=agent_name or "pipeline-node",
+            version="1.0.0",
+            session=config.get("session", {}),
+            providers=config.get("providers", []),
+            tools=config.get("tools", []),
+            hooks=config.get("hooks", []),
+        )
+
+        return await prepared.spawn(
+            child_bundle=child_bundle,
+            instruction=instruction,
+            session_id=sub_session_id,
+            parent_session=parent_session,
+            orchestrator_config=orchestrator_config,
+            parent_messages=parent_messages,
+            provider_preferences=provider_preferences,
+            self_delegation_depth=self_delegation_depth,
+        )
+
+    session.coordinator.register_capability("session.spawn", spawn_capability)
 
 
 async def _create_session(
@@ -144,6 +202,7 @@ async def _create_session(
 
     initialized = await create_initialized_session(session_config, cli_console)
     return initialized, cli_console
+
 
 async def run(
     prompt: str = "",
@@ -269,25 +328,33 @@ async def _run_attractor(
     bundle_path: str,
     cwd: str | None = None,
 ) -> int:
-    """Run an Attractor DOT pipeline via ``amplifier run`` with a temp overlay bundle.
+    """Run an Attractor DOT pipeline in-process via the Python API (Path B).
 
-    Why ``amplifier run`` (not ``tool invoke run_pipeline``):
-    - ``run_pipeline`` spawns ``attractor-pipeline-runner`` as a child session.
-      That agent references ``loop-pipeline`` only in its YAML config, which is
-      lazy-loaded — ``amplifier_module_loop_pipeline`` is never pip-installed, so
-      the child silently falls back to DirectProviderBackend (``nodes_completed: 0``).
-    - ``amplifier run -b attractor-pipeline.bundle.md`` makes ``loop-pipeline``
-      the OUTER session orchestrator.  The bundle-prepare step installs the module,
-      the CLI wires ``session.spawn``, and AmplifierBackend works correctly.
+    Why in-process Python API (not ``amplifier run -B bundle``):
+    - ``amplifier run`` ignores ``session.orchestrator.module`` from the bundle;
+      it always drives the session with its own built-in agent loop regardless
+      of what the bundle declares.  Every test showed flat-agent behaviour.
+    - The Python API (``load_bundle`` → compose overlay → ``create_session``) IS
+      the supported path for custom orchestrators, per APP-INTEGRATION-GUIDE.
 
-    Overlay pattern:
-    - ``bundle_path`` is the base pipeline bundle (``attractor-pipeline.bundle.md``).
-    - The wrapper generates a tiny temp overlay that ``includes:`` the base bundle
-      and injects ``dot_source`` into ``session.orchestrator.config`` so any DOT
-      file can be used without modifying the base bundle.
+    Why ``_register_spawn_capability`` must be called on THIS session:
+    - ``create_initialized_session`` wires the CLI's standard ``session.spawn``
+      (``register_session_spawning``), but that uses ``spawn_sub_session`` which
+      does NOT install agent bundle modules.  When ``loop-pipeline`` tries to
+      spawn per-node child sessions via that capability, the grandchildren
+      succeed, but our earlier attempts registered on the wrong (outer) session.
+    - Here we register AFTER ``create_initialized_session``, overriding with a
+      ``prepared.spawn()``-based capability on the session whose orchestrator IS
+      ``loop-pipeline``.  ``_build_backend()`` then finds ``session.spawn`` →
+      ``AmplifierBackend`` → per-node child sessions → ``nodes_completed > 0``.
     """
-    import textwrap
-    from uuid import uuid4
+    from amplifier_app_cli.console import console as cli_console
+    from amplifier_app_cli.session_runner import (
+        SessionConfig,
+        create_initialized_session,
+    )
+    from amplifier_foundation import Bundle, load_bundle
+    from rich.markdown import Markdown
 
     if not Path(content).exists():
         raise FileNotFoundError(
@@ -298,43 +365,50 @@ async def _run_attractor(
     goal = _parse_goal(ctx_prefix)
     dot_source = Path(content).read_text(encoding="utf-8")
 
-    # Indent the DOT source for embedding as a YAML block scalar.
-    # Each line must be indented 8 spaces to sit under `dot_source: |-`.
-    dot_indented = textwrap.indent(dot_source, "        ")
-
-    overlay = textwrap.dedent(f"""\
-        ---
-        bundle:
-          name: attractor-run-{uuid4().hex[:8]}
-          version: 1.0.0
-        includes:
-          - bundle: {bundle_path}
-        session:
-          orchestrator:
-            config:
-              dot_source: |-
-        {dot_indented}
-        ---
-        """)
-
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".md", delete=False, encoding="utf-8"
-    )
+    # --- Bundle preparation -------------------------------------------
+    # Compose base pipeline bundle with a dot_source overlay, then prepare.
+    # prepare() installs loop-pipeline and loop-agent in the Python env.
+    prev_cwd = os.getcwd()
+    if cwd:
+        os.chdir(cwd)
     try:
-        tmp.write(overlay)
-        tmp.flush()
-        overlay_path = tmp.name
-        tmp.close()
-
-        proc = await asyncio.create_subprocess_exec(
-            "amplifier", "run",
-            "-B", f"file://{overlay_path}",
-            goal,
-            cwd=cwd or os.getcwd(),
+        base_bundle = await load_bundle(bundle_path)
+        overlay = Bundle(
+            name="attractor-overlay",
+            version="1.0.0",
+            session={"orchestrator": {"config": {"dot_source": dot_source}}},
         )
-        return await proc.wait()
+        composed = base_bundle.compose(overlay)
+        prepared = await composed.prepare()
     finally:
-        Path(tmp.name).unlink(missing_ok=True)
+        if cwd:
+            os.chdir(prev_cwd)
+
+    # --- Session creation with full CLI wiring -----------------------
+    session_config = SessionConfig(
+        config={},
+        search_paths=[Path(cwd) if cwd else Path.cwd()],
+        verbose=False,
+        prepared_bundle=prepared,
+        bundle_name=bundle_path,
+    )
+    initialized = await create_initialized_session(session_config, cli_console)
+
+    try:
+        # Override the CLI's standard session.spawn with one backed by
+        # prepared.spawn() so loop-pipeline's _build_backend() picks
+        # AmplifierBackend and spawns per-node child sessions.
+        _register_spawn_capability(initialized.session, prepared)
+
+        response = await initialized.session.execute(goal)
+        if response:
+            cli_console.print(Markdown(response))
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        cli_console.print(f"[red]Error:[/red] {exc}")
+        return 1
+    finally:
+        await initialized.cleanup()
 
 
 async def _run_prompt_or_attractor(
