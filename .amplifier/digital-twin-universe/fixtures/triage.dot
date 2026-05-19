@@ -14,12 +14,12 @@ digraph triage {
   rankdir=TB
 
   classify [
-    label="Classify Issue"
+    label="Classify Issue",
     description="Read the issue title and body. Determine the type (bug, feature-request, question, documentation) and severity. Add the appropriate label using github_add_label. Output: classification summary."
   ]
 
   report [
-    label="Post Report"
+    label="Post Report",
     description="Using the classification from the previous step, post a structured triage comment using github_post_comment. Include: type, severity, one-sentence summary, and recommended next action."
   ]
 

@@ -10,7 +10,7 @@ includes:
   - bundle: git+https://github.com/microsoft/amplifier-foundation@main
   # Recipes tool — required for recipe execution.
   - bundle: git+https://github.com/microsoft/amplifier-bundle-recipes@main
-  # Attractor pipeline runner — enables DOT pipeline execution via tool-pipeline-run
+  # Attractor core — provides report_outcome tool + attractor: namespace
   - bundle: git+https://github.com/microsoft/amplifier-bundle-attractor@main
 
 providers:
@@ -24,6 +24,12 @@ providers:
       default_model: claude-sonnet-4-6
 
 tools:
+  # Pipeline execution — required by _run_attractor() in wrapper.py.
+  # tool-pipeline-run provides the run_pipeline tool; the main attractor bundle
+  # include above does NOT bring this in (only attractor-core is loaded from it).
+  - module: tool-pipeline-run
+    source: git+https://github.com/microsoft/amplifier-bundle-attractor@main#subdirectory=modules/tool-pipeline-run
+
   # These tools are registered via entry points in pyproject.toml, so no
   # source: path is needed — Amplifier discovers them through the installed
   # amplifier_app_actions package (uv run --project ensures it is installed).

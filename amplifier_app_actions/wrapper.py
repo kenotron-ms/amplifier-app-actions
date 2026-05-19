@@ -229,153 +229,6 @@ async def run(
         )
 
 
-def _register_spawn_capability(session: Any, prepared: Any) -> None:
-    """Register session.spawn so loop-pipeline uses AmplifierBackend.
-
-    Each DOT pipeline node gets its own child session with full tool access.
-    Without this, loop-pipeline silently falls back to DirectProviderBackend
-    (LLM-only calls, no tools).
-
-    Reference: amplifier-bundle-attractor/docs/APP-INTEGRATION-GUIDE.md Path B
-    """
-    from amplifier_foundation import Bundle
-
-    async def spawn_capability(
-        agent_name: str,
-        instruction: str,
-        parent_session: Any,
-        agent_configs: dict[str, dict[str, Any]],
-        sub_session_id: str | None = None,
-        orchestrator_config: dict[str, Any] | None = None,
-        parent_messages: list[dict[str, Any]] | None = None,
-        provider_preferences: list | None = None,
-        self_delegation_depth: int = 0,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        if agent_name in agent_configs:
-            config = agent_configs[agent_name]
-        elif hasattr(prepared, "bundle") and agent_name in prepared.bundle.agents:
-            config = prepared.bundle.agents[agent_name]
-        else:
-            # Fallback: empty config.
-            # loop-pipeline passes agent_name="" when profiles={} (no explicit profiles
-            # config, no agents in coordinator config). With empty config, child_bundle
-            # has no tools/providers/hooks, but prepared.spawn(compose=True) (the default)
-            # calls Bundle.compose() which merges the parent bundle's full tool set
-            # (github_post_comment, github_add_label, github_checkout_repo) into the child.
-            # Raising ValueError here causes loop-pipeline to fall back to
-            # DirectProviderBackend — no tools, so github_post_comment is never called.
-            config = {}
-
-        # Note on orchestrator inheritance:
-        # Child sessions inherit loop-pipeline from the parent bundle via
-        # Bundle.compose(). That's fine — child coordinators do NOT have
-        # session.spawn registered, so loop-pipeline correctly falls back to
-        # DirectProviderBackend (single LLM agentic loop with tools). No recursion.
-
-        # Add hooks-streaming-ui so each node session logs tool calls, thinking
-        # blocks, and LLM responses to stdout — same style as amplifier-app-cli.
-        streaming_ui_hook = {
-            "module": "hooks-streaming-ui",
-            "config": {
-                "ui": {
-                    "show_thinking_stream": True,
-                    "show_tool_lines": 500,
-                    "show_token_usage": True,
-                }
-            },
-        }
-        child_bundle = Bundle(
-            name=agent_name,
-            version="1.0.0",
-            session=config.get("session", {}),
-            providers=config.get("providers", []),
-            tools=config.get("tools", []),
-            hooks=[*config.get("hooks", []), streaming_ui_hook],
-            instruction=(
-                config.get("instruction") or config.get("system", {}).get("instruction")
-            ),
-        )
-
-        return await prepared.spawn(
-            child_bundle=child_bundle,
-            instruction=instruction,
-            session_id=sub_session_id,
-            parent_session=parent_session,
-            orchestrator_config=orchestrator_config,
-            parent_messages=parent_messages,
-            provider_preferences=provider_preferences,
-            self_delegation_depth=self_delegation_depth,
-        )
-
-    session.coordinator.register_capability("session.spawn", spawn_capability)
-
-
-def _register_pipeline_log_hooks(session: Any) -> None:
-    """Register hooks that print real-time pipeline progress to stdout.
-
-    loop-pipeline emits pipeline:node_start and pipeline:node_complete events
-    via session.coordinator.hooks. Intercepting them gives per-node visibility
-    in GitHub Actions logs without any changes to loop-pipeline itself.
-    """
-
-    async def on_node_start(_event: str, data: dict[str, Any]) -> None:
-        node_id = data.get("node_id", "?")
-        print(f"[pipeline] ▶  {node_id}", flush=True)
-
-    async def on_node_complete(_event: str, data: dict[str, Any]) -> None:
-        node_id = data.get("node_id", "?")
-        status = data.get("status", "?")
-        ms = float(data.get("duration_ms") or 0)
-        notes = (data.get("notes") or "").strip()
-        failure = (data.get("failure_reason") or "").strip()
-        icon = "✅" if status == "success" else "❌"
-        detail = notes or failure
-        line = f"[pipeline] {icon} {node_id}: {status} ({ms / 1000:.1f}s)"
-        if detail:
-            line += f" — {detail}"
-        print(line, flush=True)
-
-    async def on_stage_failed(_event: str, data: dict[str, Any]) -> None:
-        node_id = data.get("node_id", "?")
-        reason = (data.get("failure_reason") or data.get("reason") or "unknown").strip()
-        print(f"[pipeline] ❌ FAILED {node_id}: {reason}", flush=True)
-
-    async def on_edge_selected(_event: str, data: dict[str, Any]) -> None:
-        src = data.get("from_node", "?")
-        dst = data.get("to_node", "?")
-        label = data.get("edge_label", "")
-        edge = f"{src} → {dst}"
-        if label:
-            edge += f" [{label}]"
-        print(f"[pipeline]    {edge}", flush=True)
-
-    async def on_provider_request(_event: str, data: dict[str, Any]) -> None:
-        # Fires for each LLM call inside a node — shows model, prompt length
-        node_id = data.get("node_id") or data.get("context", {}).get("node_id", "?")
-        model = data.get("model") or data.get("llm_model", "?")
-        tokens = data.get("input_tokens") or data.get("prompt_tokens", "")
-        tok_str = f" ({tokens} tokens)" if tokens else ""
-        print(f"[pipeline]   🔄 {node_id} → {model}{tok_str}", flush=True)
-
-    async def on_provider_response(_event: str, data: dict[str, Any]) -> None:
-        # Fires after each LLM response — shows output tokens, tool calls
-        node_id = data.get("node_id") or data.get("context", {}).get("node_id", "?")
-        out_tokens = data.get("output_tokens") or data.get("completion_tokens", "")
-        tool_calls = data.get("tool_calls") or []
-        tools_str = ", ".join(t.get("name", "?") for t in tool_calls) if tool_calls else ""
-        msg = f"[pipeline]   ← {node_id}: {out_tokens} tokens out"
-        if tools_str:
-            msg += f" | calls: {tools_str}"
-        print(msg, flush=True)
-
-    hooks = session.coordinator.hooks
-    hooks.register("pipeline:node_start", on_node_start)
-    hooks.register("pipeline:node_complete", on_node_complete)
-    hooks.register("pipeline:stage_failed", on_stage_failed)
-    hooks.register("pipeline:edge_selected", on_edge_selected)
-    hooks.register("provider:request", on_provider_request)
-    hooks.register("provider:response", on_provider_response)
 
 
 async def _run_attractor(
@@ -384,123 +237,41 @@ async def _run_attractor(
     bundle_path: str,
     cwd: str | None = None,
 ) -> int:
-    """Run an Attractor DOT pipeline via loop-pipeline with AmplifierBackend.
+    """Run an Attractor DOT pipeline via `amplifier tool invoke run_pipeline`.
 
-    Path B from the Attractor App Integration Guide:
-    - Composes base bundle with loop-pipeline as the orchestrator
-    - Registers session.spawn so each DOT node gets its own child session
-    - GitHub tools flow to child sessions via Bundle.compose() inheritance
-
-    Without register_spawn_capability, loop-pipeline falls back to
-    DirectProviderBackend (no tools, no per-node isolation).
+    Delegates entirely to the amplifier CLI. create_initialized_session (called
+    internally by the CLI) wires up session.spawn via register_session_spawning(),
+    giving run_pipeline genuine AmplifierBackend — each node is a real Amplifier
+    child session with a standard orchestrator, full tool access, and proper
+    tool:pre / tool:post / llm:response hook events.
     """
-    from rich.markdown import Markdown
-    from amplifier_app_cli.console import console as cli_console
-    from amplifier_foundation import Bundle, load_bundle
+    import re as _re
 
-    # Read the DOT file content
-    dot_path = Path(content)
-    if not dot_path.exists():
+    if not Path(content).exists():
         raise FileNotFoundError(
             f"Attractor DOT file not found: {content}. "
             "Ensure actions/checkout is present in your workflow."
         )
-    dot_source = dot_path.read_text(encoding="utf-8")
 
-    # Inject issue coordinates into the DOT goal so pipeline nodes can
-    # reference owner/repo/number via $goal. We extract only the structured
-    # header (single line) — injecting the full body breaks the DOT parser
-    # because issue text contains words that look like DOT node identifiers.
+    goal = "Triage the GitHub issue."
     if ctx_prefix:
-        import re as _re
-        # ctx_prefix header: "[issues: #N in owner/repo]"
-        header_match = _re.search(
+        m = _re.search(
             r"\[(?P<type>issues|pull_request): #(?P<number>\d+) in (?P<owner>[^/\]]+)/(?P<repo>[^\]]+)\]",
             ctx_prefix,
         )
-        title_match = _re.search(r"Title: (.+)", ctx_prefix)
-        if header_match:
-            owner = header_match.group("owner")
-            repo = header_match.group("repo")
-            number = header_match.group("number")
-            title = title_match.group(1).strip() if title_match else "Issue"
-            # Short, safe single-line goal — no embedded newlines or special chars
-            goal_text = (
-                f"Issue #{number} in {owner}/{repo}: {title}"
-            ).replace('"', "'")
-            dot_source = _re.sub(
-                r'goal\s*=\s*"[^"]*"',
-                f'goal="{goal_text}"',
-                dot_source,
-                count=1,
-            )
+        t = _re.search(r"Title: (.+)", ctx_prefix)
+        if m:
+            title = t.group(1).strip() if t else "Issue"
+            goal = f"Issue #{m.group('number')} in {m.group('owner')}/{m.group('repo')}: {title}".replace('"', "'")
 
-    # Change to cwd for bundle resolution (mirrors _create_session behaviour)
-    prev_cwd = os.getcwd()
-    if cwd:
-        os.chdir(cwd)
-    try:
-        # Load base bundle (github-tools + GitHub tools + Attractor bundle)
-        base_bundle = await load_bundle(bundle_path)
-
-        # Compose with loop-pipeline as the session orchestrator.
-        # Bundle.compose() merges parent tool list into child — GitHub tools
-        # declared in the base bundle YAML flow to per-node child sessions.
-        import uuid
-        # Unique logs_root per run — loop-pipeline defaults to a fixed shared
-        # /tmp/attractor-pipeline path which causes stale checkpoint reuse across runs.
-        run_id = uuid.uuid4().hex[:8]
-        logs_root = str(Path(tempfile.gettempdir()) / f"triage-pipeline-{run_id}")
-
-        overlay = Bundle(
-            name="triage-pipeline",
-            version="1.0.0",
-            session={
-                "orchestrator": {
-                    "module": "loop-pipeline",
-                    # Explicit source so the module resolver uses the Attractor
-                    # bundle's loop-pipeline, not a cached module with a similar name.
-                    "source": (
-                        "git+https://github.com/microsoft/amplifier-bundle-attractor"
-                        "@main#subdirectory=modules/loop-pipeline"
-                    ),
-                    "config": {
-                        "dot_source": dot_source,
-                        "logs_root": logs_root,
-                    },
-                }
-            },
-        )
-        composed = base_bundle.compose(overlay)
-        prepared = await composed.prepare()
-    finally:
-        if cwd:
-            os.chdir(prev_cwd)
-
-    session = await prepared.create_session(
-        session_cwd=Path(cwd) if cwd else Path.cwd()
+    proc = await asyncio.create_subprocess_exec(
+        "amplifier", "tool", "invoke", "run_pipeline",
+        "-b", bundle_path,
+        f"dot_file={content}",
+        f"goal={goal}",
+        cwd=cwd or os.getcwd(),
     )
-
-    # Register session.spawn — activates AmplifierBackend for per-node sessions
-    _register_spawn_capability(session, prepared)
-
-    # Register pipeline event hooks for real-time log output.
-    # loop-pipeline emits these events via session.coordinator.hooks, giving us
-    # per-node start/complete/fail visibility in GitHub Actions logs.
-    _register_pipeline_log_hooks(session)
-
-    try:
-        # Issue context (GitHub event data) is the instruction preamble
-        instruction = ctx_prefix + "\nRun the triage pipeline."
-        response = await session.execute(instruction)
-        if response:
-            cli_console.print(Markdown(response))
-        return 0
-    except Exception as exc:  # noqa: BLE001
-        cli_console.print(f"[red]Error:[/red] {exc}")
-        return 1
-    finally:
-        await session.cleanup()
+    return await proc.wait()
 
 
 async def _run_prompt_or_attractor(
