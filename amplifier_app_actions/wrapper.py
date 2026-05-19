@@ -137,13 +137,27 @@ def _register_spawn_capability(session: Any, prepared: Any) -> None:
         ):
             config = prepared.bundle.agents[agent_name]
 
+        # Gate github_post_comment at the tool level: only give it to nodes
+        # whose instruction explicitly asks for it.  More reliable than relying
+        # on a system instruction the model might ignore.
+        tools = list(config.get("tools", []))
+        if "github_post_comment" not in (instruction or ""):
+            tools = [
+                t for t in tools
+                if not (isinstance(t, dict) and "post-comment" in t.get("module", ""))
+            ]
+
         child_bundle = Bundle(
             name=agent_name or "pipeline-node",
             version="1.0.0",
             session=config.get("session", {}),
             providers=config.get("providers", []),
-            tools=config.get("tools", []),
+            tools=tools,
             hooks=config.get("hooks", []),
+            instruction=(
+                config.get("instruction")
+                or (config.get("system") or {}).get("instruction")
+            ),
         )
 
         # Print to stdout so GH Actions logs show which node is running
