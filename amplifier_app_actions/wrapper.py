@@ -146,7 +146,10 @@ def _register_spawn_capability(session: Any, prepared: Any) -> None:
             hooks=config.get("hooks", []),
         )
 
-        return await prepared.spawn(
+        # Print to stdout so GH Actions logs show which node is running
+        # and what it returned — gives visibility into the inner cycle.
+        print(f"\n>>> [{agent_name}] starting", flush=True)
+        result = await prepared.spawn(
             child_bundle=child_bundle,
             instruction=instruction,
             compose=False,  # child uses only its own tools — no parent tool inheritance
@@ -157,6 +160,9 @@ def _register_spawn_capability(session: Any, prepared: Any) -> None:
             provider_preferences=provider_preferences,
             self_delegation_depth=self_delegation_depth,
         )
+        output = (result or {}).get("output") or (result or {}).get("response") or ""
+        print(f"<<< [{agent_name}] complete\n{str(output)[:1500]}", flush=True)
+        return result
 
     session.coordinator.register_capability("session.spawn", spawn_capability)
 
@@ -363,7 +369,12 @@ async def _run_attractor(
             "Ensure actions/checkout is present in your workflow."
         )
 
-    goal = _parse_goal(ctx_prefix)
+    # Pass the full event context as the pipeline goal so $goal in every
+    # DOT node prompt (investigate, quality_eval, comment_draft) contains
+    # the complete issue body, labels, and author — not just the title.
+    # Without the body the investigate node has no idea what the issue says
+    # and cannot do ecosystem-level root-cause analysis.
+    goal = ctx_prefix.strip() if ctx_prefix else "Triage the GitHub issue."
     dot_source = Path(content).read_text(encoding="utf-8")
 
     # --- Bundle preparation -------------------------------------------
