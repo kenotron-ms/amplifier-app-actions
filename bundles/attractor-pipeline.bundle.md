@@ -56,6 +56,9 @@ agents:
         config:
           max_tool_rounds_per_input: 50
           default_command_timeout_ms: 120000
+      context:
+        module: context-simple
+        source: git+https://github.com/microsoft/amplifier-module-context-simple@main
     providers:
       - module: provider-anthropic
         source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
