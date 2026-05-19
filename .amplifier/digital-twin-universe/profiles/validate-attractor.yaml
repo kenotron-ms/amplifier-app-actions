@@ -126,26 +126,12 @@ provision:
       echo "amplifier-triage installed successfully"
 
     # --- Write the attractor DOT to /root/triage.dot ---
+    # Use the maintained fixture file from the cloned repo so the DOT format
+    # is always in sync with the attractor-pipeline validator requirements.
     - |
-      cat > /root/triage.dot << 'DOTEOF'
-      digraph triage {
-        label="Issue Triage Attractor (DTU Test)"
-        rankdir=TB
-
-        classify [
-          label="Classify Issue"
-          description="Read the issue title and body. Determine the type (bug, feature-request, question, performance) and severity. Add the appropriate label using github_add_label. Output: classification summary."
-        ]
-
-        report [
-          label="Post Report"
-          description="Using the classification from the previous step, post a structured triage comment using github_post_comment. Include: type, severity, one-sentence summary, and recommended next action."
-        ]
-
-        classify -> report
-      }
-      DOTEOF
-      echo "Attractor DOT written to /root/triage.dot"
+      cp /root/amplifier-app-actions/.amplifier/digital-twin-universe/fixtures/triage.dot \
+        /root/triage.dot
+      echo "Attractor DOT written to /root/triage.dot (from fixtures)"
 
     # --- Write the synthetic GitHub issue event JSON ---
     - |
