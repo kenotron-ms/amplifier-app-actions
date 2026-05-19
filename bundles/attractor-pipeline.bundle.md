@@ -77,6 +77,14 @@ agents:
         source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
         config:
           default_model: claude-sonnet-4-6
+    hooks:
+      - module: hooks-streaming-ui
+        source: git+https://github.com/microsoft/amplifier-module-hooks-streaming-ui@main
+        config:
+          ui:
+            show_thinking_stream: true
+            show_tool_lines: 30
+            show_token_usage: true
     tools:
       - module: tool-filesystem
         source: git+https://github.com/microsoft/amplifier-module-tool-filesystem@main
@@ -105,6 +113,14 @@ agents:
         source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
         config:
           default_model: claude-sonnet-4-6
+    hooks:
+      - module: hooks-streaming-ui
+        source: git+https://github.com/microsoft/amplifier-module-hooks-streaming-ui@main
+        config:
+          ui:
+            show_thinking_stream: true
+            show_tool_lines: 30
+            show_token_usage: true
     tools:
       # Same investigation tools as pipeline-agent-anthropic so the commenter
       # can re-verify findings in code before writing the final comment.
