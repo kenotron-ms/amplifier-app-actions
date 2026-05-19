@@ -264,10 +264,16 @@ async def _run_attractor(
             title = t.group(1).strip() if t else "Issue"
             goal = f"Issue #{m.group('number')} in {m.group('owner')}/{m.group('repo')}: {title}".replace('"', "'")
 
+    # Resolve dot_file to an absolute path before spawning the subprocess.
+    # The existence check above ran with the caller's CWD (repo root), but the
+    # subprocess runs with cwd=action_path.  A bare relative path like
+    # ".github/amplifier/triage-review.dot" would fail in that context.
+    dot_file_abs = str(Path(content).resolve())
+
     proc = await asyncio.create_subprocess_exec(
         "amplifier", "tool", "invoke", "run_pipeline",
         "-b", bundle_path,
-        f"dot_file={content}",
+        f"dot_file={dot_file_abs}",
         f"goal={goal}",
         cwd=cwd or os.getcwd(),
     )
