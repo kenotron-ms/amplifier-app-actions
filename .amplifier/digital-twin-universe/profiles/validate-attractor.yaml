@@ -102,10 +102,9 @@ provision:
 
       echo "Labels created"
 
-    # --- Install amplifier-app-actions from local Gitea mirror ---
-    # Use the Gitea URL directly to avoid mitmproxy HTTPS→HTTP redirect issues.
-    # ${GITEA_URL} is auto-rewritten from localhost:3030 to 192.168.100.1:3030
-    # inside the container so it is reachable from the Incus network.
+    # --- Clone and sync amplifier-app-actions from local Gitea mirror ---
+    # Use git clone + uv sync (mirrors GitHub Actions behavior) so bundles/
+    # is available at the repo root, matching the action_path default in wrapper.py.
     - |
       set -e
       # Store Gitea credentials for git
@@ -113,13 +112,17 @@ provision:
       printf 'http://admin:%s@%s\n' "${GITEA_TOKEN}" "${GITEA_URL#http://}" \
         >> /root/.git-credentials
 
-      # Install directly from Gitea (HTTP) — avoids the GitHub fast path and
-      # mitmproxy protocol issues.  Transitive deps (amplifier-foundation,
-      # amplifier-app-cli, etc.) are fetched from GitHub via internet passthrough.
-      uv tool install -vv \
-        "git+${GITEA_URL}/admin/amplifier-app-actions.git"
+      # Clone directly from Gitea
+      git clone "${GITEA_URL}/admin/amplifier-app-actions.git" /root/amplifier-app-actions
+      echo "Repo cloned from Gitea"
 
-      amplifier-triage --help
+      # Sync dependencies (editable install — bundles/ visible at repo root)
+      cd /root/amplifier-app-actions
+      uv sync
+      echo "uv sync complete"
+
+      # Verify amplifier-triage is available
+      .venv/bin/amplifier-triage --help
       echo "amplifier-triage installed successfully"
 
     # --- Write the attractor DOT to /root/triage.dot ---
@@ -170,7 +173,7 @@ provision:
       GITHUB_API_URL="${GITEA_URL}/api/v1" \
       GITHUB_CLONE_URL="${GITEA_URL}" \
       GITHUB_TOKEN="${GITEA_TOKEN}" \
-      amplifier-triage \
+      /root/amplifier-app-actions/.venv/bin/amplifier-triage \
         --attractor-source /root/triage.dot \
         --provider anthropic \
         --github-token "${GITEA_TOKEN}" \
