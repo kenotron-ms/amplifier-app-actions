@@ -614,3 +614,184 @@ async def test_action_path_defaults_correctly(tmp_path):
     # The bundle path should contain the actual repo directory
     actual_parent = str(Path(wrapper.__file__).parent.parent)
     assert actual_parent in argv[bundle_idx + 1]
+
+
+# ---------------------------------------------------------------------------
+# Path B Attractor — _register_spawn_capability
+# ---------------------------------------------------------------------------
+
+
+def test_register_spawn_capability_registers_on_coordinator():
+    """_register_spawn_capability calls register_capability('session.spawn', ...) on coordinator."""
+    import asyncio
+
+    from amplifier_app_actions.wrapper import _register_spawn_capability
+
+    mock_coordinator = MagicMock()
+    mock_session = MagicMock()
+    mock_session.coordinator = mock_coordinator
+
+    mock_prepared = MagicMock()
+    mock_prepared.bundle = MagicMock()
+    mock_prepared.bundle.agents = {}
+
+    _register_spawn_capability(mock_session, mock_prepared)
+
+    mock_coordinator.register_capability.assert_called_once()
+    name, fn = mock_coordinator.register_capability.call_args[0]
+    assert name == "session.spawn"
+    assert asyncio.iscoroutinefunction(fn)
+
+
+# ---------------------------------------------------------------------------
+# Path B Attractor — _run_attractor
+# ---------------------------------------------------------------------------
+
+
+async def test_run_attractor_reads_dot_and_configures_loop_pipeline(tmp_path):
+    """_run_attractor reads DOT file and composes bundle with loop-pipeline orchestrator."""
+    dot_file = tmp_path / "pipeline.dot"
+    dot_source = "digraph G { A -> B; }"
+    dot_file.write_text(dot_source)
+
+    mock_session = MagicMock()
+    mock_session.execute = AsyncMock(return_value="done")
+    mock_session.cleanup = AsyncMock()
+    mock_session.coordinator = MagicMock()
+    mock_session.coordinator.register_capability = MagicMock()
+
+    mock_prepared = MagicMock()
+    mock_prepared.create_session = AsyncMock(return_value=mock_session)
+    mock_prepared.bundle = MagicMock()
+    mock_prepared.bundle.agents = {}
+
+    mock_composed = MagicMock()
+    mock_composed.prepare = AsyncMock(return_value=mock_prepared)
+
+    mock_base_bundle = MagicMock()
+    mock_base_bundle.compose = MagicMock(return_value=mock_composed)
+
+    captured_bundle_calls: list = []
+
+    def capture_bundle(**kwargs):
+        captured_bundle_calls.append(kwargs)
+        return MagicMock()
+
+    with (
+        patch(
+            "amplifier_foundation.load_bundle",
+            new_callable=AsyncMock,
+            return_value=mock_base_bundle,
+        ),
+        patch("amplifier_foundation.Bundle", side_effect=capture_bundle),
+        patch("amplifier_app_cli.console.console"),
+        patch("rich.markdown.Markdown"),
+    ):
+        from amplifier_app_actions.wrapper import _run_attractor
+
+        result = await _run_attractor(
+            content=str(dot_file),
+            ctx_prefix="",
+            bundle_path="some-bundle",
+            cwd=None,
+        )
+
+    assert result == 0
+    # Exactly one Bundle() call — the loop-pipeline overlay
+    assert len(captured_bundle_calls) == 1
+    overlay_kwargs = captured_bundle_calls[0]
+    session_cfg = overlay_kwargs.get("session", {})
+    orchestrator = session_cfg.get("orchestrator", {})
+    assert orchestrator.get("module") == "loop-pipeline"
+    assert orchestrator.get("config", {}).get("dot_source") == dot_source
+
+
+async def test_run_attractor_missing_dot_file_raises(tmp_path):
+    """_run_attractor raises FileNotFoundError when the DOT file does not exist."""
+    import pytest
+
+    from amplifier_app_actions.wrapper import _run_attractor
+
+    with pytest.raises(FileNotFoundError, match="Attractor DOT file not found"):
+        await _run_attractor(
+            content=str(tmp_path / "nonexistent.dot"),
+            ctx_prefix="",
+            bundle_path="some-bundle",
+            cwd=None,
+        )
+
+
+async def test_run_attractor_returns_1_on_session_error(tmp_path):
+    """_run_attractor returns 1 when session.execute raises an exception."""
+    dot_file = tmp_path / "pipeline.dot"
+    dot_file.write_text("digraph G { A -> B; }")
+
+    mock_session = MagicMock()
+    mock_session.execute = AsyncMock(side_effect=RuntimeError("provider error"))
+    mock_session.cleanup = AsyncMock()
+    mock_session.coordinator = MagicMock()
+    mock_session.coordinator.register_capability = MagicMock()
+
+    mock_prepared = MagicMock()
+    mock_prepared.create_session = AsyncMock(return_value=mock_session)
+    mock_prepared.bundle = MagicMock()
+    mock_prepared.bundle.agents = {}
+
+    mock_composed = MagicMock()
+    mock_composed.prepare = AsyncMock(return_value=mock_prepared)
+
+    mock_base_bundle = MagicMock()
+    mock_base_bundle.compose = MagicMock(return_value=mock_composed)
+
+    with (
+        patch(
+            "amplifier_foundation.load_bundle",
+            new_callable=AsyncMock,
+            return_value=mock_base_bundle,
+        ),
+        patch("amplifier_foundation.Bundle", return_value=MagicMock()),
+        patch("amplifier_app_cli.console.console"),
+        patch("rich.markdown.Markdown"),
+    ):
+        from amplifier_app_actions.wrapper import _run_attractor
+
+        result = await _run_attractor(
+            content=str(dot_file),
+            ctx_prefix="",
+            bundle_path="some-bundle",
+            cwd=None,
+        )
+
+    assert result == 1
+
+
+# ---------------------------------------------------------------------------
+# Path B Attractor — run() routing
+# ---------------------------------------------------------------------------
+
+
+async def test_run_routes_attractor_to_run_attractor(tmp_path):
+    """run() with attractor_source dispatches to _run_attractor, not _run_prompt_or_attractor."""
+    dot_file = tmp_path / "pipeline.dot"
+    dot_file.write_text("digraph G { A -> B; }")
+
+    with (
+        patch(
+            "amplifier_app_actions.wrapper._run_attractor",
+            new_callable=AsyncMock,
+            return_value=0,
+        ) as mock_attractor,
+        patch(
+            "amplifier_app_actions.wrapper._run_prompt_or_attractor",
+            new_callable=AsyncMock,
+            return_value=0,
+        ) as mock_prompt,
+    ):
+        result = await run(
+            attractor_source=str(dot_file),
+            action_path=tmp_path,
+        )
+
+    assert result == 0
+    mock_attractor.assert_called_once()
+    mock_prompt.assert_not_called()

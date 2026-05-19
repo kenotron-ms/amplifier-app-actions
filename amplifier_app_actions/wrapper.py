@@ -212,6 +212,13 @@ async def run(
             bundle_path=bundle_path,
             cwd=action_cwd,
         )
+    elif itype == InstructionType.ATTRACTOR:
+        return await _run_attractor(
+            content=content,
+            ctx_prefix=ctx_prefix,
+            bundle_path=bundle_path,
+            cwd=action_cwd,
+        )
     else:
         return await _run_prompt_or_attractor(
             itype=itype,
@@ -222,6 +229,142 @@ async def run(
         )
 
 
+def _register_spawn_capability(session: Any, prepared: Any) -> None:
+    """Register session.spawn so loop-pipeline uses AmplifierBackend.
+
+    Each DOT pipeline node gets its own child session with full tool access.
+    Without this, loop-pipeline silently falls back to DirectProviderBackend
+    (LLM-only calls, no tools).
+
+    Reference: amplifier-bundle-attractor/docs/APP-INTEGRATION-GUIDE.md Path B
+    """
+    from amplifier_foundation import Bundle
+
+    async def spawn_capability(
+        agent_name: str,
+        instruction: str,
+        parent_session: Any,
+        agent_configs: dict[str, dict[str, Any]],
+        sub_session_id: str | None = None,
+        orchestrator_config: dict[str, Any] | None = None,
+        parent_messages: list[dict[str, Any]] | None = None,
+        provider_preferences: list | None = None,
+        self_delegation_depth: int = 0,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        if agent_name in agent_configs:
+            config = agent_configs[agent_name]
+        elif hasattr(prepared, "bundle") and agent_name in prepared.bundle.agents:
+            config = prepared.bundle.agents[agent_name]
+        else:
+            available = list(agent_configs.keys())
+            if hasattr(prepared, "bundle"):
+                available += list(prepared.bundle.agents.keys())
+            raise ValueError(f"Agent '{agent_name}' not found. Available: {available}")
+
+        child_bundle = Bundle(
+            name=agent_name,
+            version="1.0.0",
+            session=config.get("session", {}),
+            providers=config.get("providers", []),
+            tools=config.get("tools", []),
+            hooks=config.get("hooks", []),
+            instruction=(
+                config.get("instruction") or config.get("system", {}).get("instruction")
+            ),
+        )
+
+        return await prepared.spawn(
+            child_bundle=child_bundle,
+            instruction=instruction,
+            session_id=sub_session_id,
+            parent_session=parent_session,
+            orchestrator_config=orchestrator_config,
+            parent_messages=parent_messages,
+            provider_preferences=provider_preferences,
+            self_delegation_depth=self_delegation_depth,
+        )
+
+    session.coordinator.register_capability("session.spawn", spawn_capability)
+
+
+async def _run_attractor(
+    content: str,
+    ctx_prefix: str,
+    bundle_path: str,
+    cwd: str | None = None,
+) -> int:
+    """Run an Attractor DOT pipeline via loop-pipeline with AmplifierBackend.
+
+    Path B from the Attractor App Integration Guide:
+    - Composes base bundle with loop-pipeline as the orchestrator
+    - Registers session.spawn so each DOT node gets its own child session
+    - GitHub tools flow to child sessions via Bundle.compose() inheritance
+
+    Without register_spawn_capability, loop-pipeline falls back to
+    DirectProviderBackend (no tools, no per-node isolation).
+    """
+    from rich.markdown import Markdown
+    from amplifier_app_cli.console import console as cli_console
+    from amplifier_foundation import Bundle, load_bundle
+
+    # Read the DOT file content
+    dot_path = Path(content)
+    if not dot_path.exists():
+        raise FileNotFoundError(
+            f"Attractor DOT file not found: {content}. "
+            "Ensure actions/checkout is present in your workflow."
+        )
+    dot_source = dot_path.read_text(encoding="utf-8")
+
+    # Change to cwd for bundle resolution (mirrors _create_session behaviour)
+    prev_cwd = os.getcwd()
+    if cwd:
+        os.chdir(cwd)
+    try:
+        # Load base bundle (github-tools + GitHub tools + Attractor bundle)
+        base_bundle = await load_bundle(bundle_path)
+
+        # Compose with loop-pipeline as the session orchestrator.
+        # Bundle.compose() merges parent tool list into child — GitHub tools
+        # declared in the base bundle YAML flow to per-node child sessions.
+        overlay = Bundle(
+            name="triage-pipeline",
+            version="1.0.0",
+            session={
+                "orchestrator": {
+                    "module": "loop-pipeline",
+                    "config": {"dot_source": dot_source},
+                }
+            },
+        )
+        composed = base_bundle.compose(overlay)
+        prepared = await composed.prepare()
+    finally:
+        if cwd:
+            os.chdir(prev_cwd)
+
+    session = await prepared.create_session(
+        session_cwd=Path(cwd) if cwd else Path.cwd()
+    )
+
+    # Register session.spawn — activates AmplifierBackend for per-node sessions
+    _register_spawn_capability(session, prepared)
+
+    try:
+        # Issue context (GitHub event data) is the instruction preamble
+        instruction = ctx_prefix + "\nRun the triage pipeline."
+        response = await session.execute(instruction)
+        if response:
+            cli_console.print(Markdown(response))
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        cli_console.print(f"[red]Error:[/red] {exc}")
+        return 1
+    finally:
+        await session.cleanup()
+
+
 async def _run_prompt_or_attractor(
     itype: InstructionType,
     content: str,
@@ -229,17 +372,10 @@ async def _run_prompt_or_attractor(
     bundle_path: str,
     cwd: str | None = None,
 ) -> int:
-    """Create an in-process session and execute a prompt or attractor."""
+    """Create an in-process session and execute a prompt or prompt_source."""
     from rich.markdown import Markdown
 
-    if itype == InstructionType.ATTRACTOR:
-        full_prompt = (
-            f"{ctx_prefix}"
-            f"Execute the attractor at: {content}\n\n"
-            "Call the attractor tool to run it directly."
-        )
-    else:
-        full_prompt = f"{ctx_prefix}{content}"
+    full_prompt = f"{ctx_prefix}{content}"
 
     initialized, console = await _create_session(bundle_path, cwd)
     try:
