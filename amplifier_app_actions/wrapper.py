@@ -267,10 +267,14 @@ def _register_spawn_capability(session: Any, prepared: Any) -> None:
             # DirectProviderBackend — no tools, so github_post_comment is never called.
             config = {}
 
+        # Note on orchestrator inheritance:
+        # Child sessions inherit loop-pipeline from the parent bundle via
+        # Bundle.compose(). That's fine — child coordinators do NOT have
+        # session.spawn registered, so loop-pipeline correctly falls back to
+        # DirectProviderBackend (single LLM agentic loop with tools). No recursion.
+
         # Add hooks-streaming-ui so each node session logs tool calls, thinking
         # blocks, and LLM responses to stdout — same style as amplifier-app-cli.
-        # The module is already importable (comes in via amplifier-foundation),
-        # so no extra dep is needed. show_tool_lines=500 avoids truncation.
         streaming_ui_hook = {
             "module": "hooks-streaming-ui",
             "config": {
@@ -315,11 +319,11 @@ def _register_pipeline_log_hooks(session: Any) -> None:
     in GitHub Actions logs without any changes to loop-pipeline itself.
     """
 
-    async def on_node_start(data: dict[str, Any]) -> None:
+    async def on_node_start(_event: str, data: dict[str, Any]) -> None:
         node_id = data.get("node_id", "?")
         print(f"[pipeline] ▶  {node_id}", flush=True)
 
-    async def on_node_complete(data: dict[str, Any]) -> None:
+    async def on_node_complete(_event: str, data: dict[str, Any]) -> None:
         node_id = data.get("node_id", "?")
         status = data.get("status", "?")
         ms = float(data.get("duration_ms") or 0)
@@ -332,25 +336,46 @@ def _register_pipeline_log_hooks(session: Any) -> None:
             line += f" — {detail}"
         print(line, flush=True)
 
-    async def on_stage_failed(data: dict[str, Any]) -> None:
+    async def on_stage_failed(_event: str, data: dict[str, Any]) -> None:
         node_id = data.get("node_id", "?")
         reason = (data.get("failure_reason") or data.get("reason") or "unknown").strip()
         print(f"[pipeline] ❌ FAILED {node_id}: {reason}", flush=True)
 
-    async def on_edge_selected(data: dict[str, Any]) -> None:
-        src = data.get("source_id", "?")
-        dst = data.get("target_id", "?")
-        label = data.get("label", "")
+    async def on_edge_selected(_event: str, data: dict[str, Any]) -> None:
+        src = data.get("from_node", "?")
+        dst = data.get("to_node", "?")
+        label = data.get("edge_label", "")
         edge = f"{src} → {dst}"
         if label:
-            edge += f" ({label})"
+            edge += f" [{label}]"
         print(f"[pipeline]    {edge}", flush=True)
+
+    async def on_provider_request(_event: str, data: dict[str, Any]) -> None:
+        # Fires for each LLM call inside a node — shows model, prompt length
+        node_id = data.get("node_id") or data.get("context", {}).get("node_id", "?")
+        model = data.get("model") or data.get("llm_model", "?")
+        tokens = data.get("input_tokens") or data.get("prompt_tokens", "")
+        tok_str = f" ({tokens} tokens)" if tokens else ""
+        print(f"[pipeline]   🔄 {node_id} → {model}{tok_str}", flush=True)
+
+    async def on_provider_response(_event: str, data: dict[str, Any]) -> None:
+        # Fires after each LLM response — shows output tokens, tool calls
+        node_id = data.get("node_id") or data.get("context", {}).get("node_id", "?")
+        out_tokens = data.get("output_tokens") or data.get("completion_tokens", "")
+        tool_calls = data.get("tool_calls") or []
+        tools_str = ", ".join(t.get("name", "?") for t in tool_calls) if tool_calls else ""
+        msg = f"[pipeline]   ← {node_id}: {out_tokens} tokens out"
+        if tools_str:
+            msg += f" | calls: {tools_str}"
+        print(msg, flush=True)
 
     hooks = session.coordinator.hooks
     hooks.register("pipeline:node_start", on_node_start)
     hooks.register("pipeline:node_complete", on_node_complete)
     hooks.register("pipeline:stage_failed", on_stage_failed)
     hooks.register("pipeline:edge_selected", on_edge_selected)
+    hooks.register("provider:request", on_provider_request)
+    hooks.register("provider:response", on_provider_response)
 
 
 async def _run_attractor(
