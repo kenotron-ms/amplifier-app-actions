@@ -293,6 +293,52 @@ def _register_spawn_capability(session: Any, prepared: Any) -> None:
     session.coordinator.register_capability("session.spawn", spawn_capability)
 
 
+def _register_pipeline_log_hooks(session: Any) -> None:
+    """Register hooks that print real-time pipeline progress to stdout.
+
+    loop-pipeline emits pipeline:node_start and pipeline:node_complete events
+    via session.coordinator.hooks. Intercepting them gives per-node visibility
+    in GitHub Actions logs without any changes to loop-pipeline itself.
+    """
+
+    async def on_node_start(data: dict[str, Any]) -> None:
+        node_id = data.get("node_id", "?")
+        print(f"[pipeline] ▶  {node_id}", flush=True)
+
+    async def on_node_complete(data: dict[str, Any]) -> None:
+        node_id = data.get("node_id", "?")
+        status = data.get("status", "?")
+        ms = float(data.get("duration_ms") or 0)
+        notes = (data.get("notes") or "").strip()
+        failure = (data.get("failure_reason") or "").strip()
+        icon = "✅" if status == "success" else "❌"
+        detail = notes or failure
+        line = f"[pipeline] {icon} {node_id}: {status} ({ms / 1000:.1f}s)"
+        if detail:
+            line += f" — {detail}"
+        print(line, flush=True)
+
+    async def on_stage_failed(data: dict[str, Any]) -> None:
+        node_id = data.get("node_id", "?")
+        reason = (data.get("failure_reason") or data.get("reason") or "unknown").strip()
+        print(f"[pipeline] ❌ FAILED {node_id}: {reason}", flush=True)
+
+    async def on_edge_selected(data: dict[str, Any]) -> None:
+        src = data.get("source_id", "?")
+        dst = data.get("target_id", "?")
+        label = data.get("label", "")
+        edge = f"{src} → {dst}"
+        if label:
+            edge += f" ({label})"
+        print(f"[pipeline]    {edge}", flush=True)
+
+    hooks = session.coordinator.hooks
+    hooks.register("pipeline:node_start", on_node_start)
+    hooks.register("pipeline:node_complete", on_node_complete)
+    hooks.register("pipeline:stage_failed", on_stage_failed)
+    hooks.register("pipeline:edge_selected", on_edge_selected)
+
+
 async def _run_attractor(
     content: str,
     ctx_prefix: str,
@@ -398,6 +444,11 @@ async def _run_attractor(
 
     # Register session.spawn — activates AmplifierBackend for per-node sessions
     _register_spawn_capability(session, prepared)
+
+    # Register pipeline event hooks for real-time log output.
+    # loop-pipeline emits these events via session.coordinator.hooks, giving us
+    # per-node start/complete/fail visibility in GitHub Actions logs.
+    _register_pipeline_log_hooks(session)
 
     try:
         # Issue context (GitHub event data) is the instruction preamble
