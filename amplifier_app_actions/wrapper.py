@@ -257,10 +257,15 @@ def _register_spawn_capability(session: Any, prepared: Any) -> None:
         elif hasattr(prepared, "bundle") and agent_name in prepared.bundle.agents:
             config = prepared.bundle.agents[agent_name]
         else:
-            available = list(agent_configs.keys())
-            if hasattr(prepared, "bundle"):
-                available += list(prepared.bundle.agents.keys())
-            raise ValueError(f"Agent '{agent_name}' not found. Available: {available}")
+            # Fallback: empty config.
+            # loop-pipeline passes agent_name="" when profiles={} (no explicit profiles
+            # config, no agents in coordinator config). With empty config, child_bundle
+            # has no tools/providers/hooks, but prepared.spawn(compose=True) (the default)
+            # calls Bundle.compose() which merges the parent bundle's full tool set
+            # (github_post_comment, github_add_label, github_checkout_repo) into the child.
+            # Raising ValueError here causes loop-pipeline to fall back to
+            # DirectProviderBackend — no tools, so github_post_comment is never called.
+            config = {}
 
         child_bundle = Bundle(
             name=agent_name,
