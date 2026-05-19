@@ -160,9 +160,9 @@ def _register_spawn_capability(session: Any, prepared: Any) -> None:
             ),
         )
 
-        # Print to stdout so GH Actions logs show which node is running
-        # and what it returned — gives visibility into the inner cycle.
-        print(f"\n>>> [{agent_name}] starting", flush=True)
+        # hooks-pipeline-progress emits [PIPELINE] ▶/✓ for node start/complete.
+        # Print the node output here so GH Actions logs show what each node
+        # actually found — the hook shows timing but not content.
         result = await prepared.spawn(
             child_bundle=child_bundle,
             instruction=instruction,
@@ -175,7 +175,8 @@ def _register_spawn_capability(session: Any, prepared: Any) -> None:
             self_delegation_depth=self_delegation_depth,
         )
         output = (result or {}).get("output") or (result or {}).get("response") or ""
-        print(f"<<< [{agent_name}] complete\n{str(output)[:1500]}", flush=True)
+        if output:
+            print(f"\n[{agent_name} output]\n{str(output)[:2000]}", flush=True)
         return result
 
     session.coordinator.register_capability("session.spawn", spawn_capability)
