@@ -149,6 +149,7 @@ def _register_spawn_capability(session: Any, prepared: Any) -> None:
         return await prepared.spawn(
             child_bundle=child_bundle,
             instruction=instruction,
+            compose=False,  # child uses only its own tools — no parent tool inheritance
             session_id=sub_session_id,
             parent_session=parent_session,
             orchestrator_config=orchestrator_config,
