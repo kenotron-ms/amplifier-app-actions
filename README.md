@@ -74,6 +74,22 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
+## Get help setting up
+
+Load the `app-actions` bundle in your local Amplifier session to get AI-assisted help configuring workflows, writing prompts, or designing attractor pipelines:
+
+```bash
+amplifier run --bundle git+https://github.com/kenotron-ms/amplifier-app-actions@main#subdirectory=bundles/app-actions.bundle.md
+```
+
+Then ask naturally:
+
+- *"Help me set up issue triage and PR reviews for my repo"* — produces ready-to-use workflow YAML with sane default prompts, correct permissions, and the bot-comment guard.
+- *"Create a .dot attractor pipeline for manager-supervisor issue investigation"* — designs the pipeline with quality gate, thread isolation, and comment-draft node.
+- *"Show me the full four-workflow pattern"* — issue triage, investigation, PR review, and triage-continue with slash commands.
+
+Two expert agents are available: `app-actions-expert` (workflow setup) and `dot-setup-expert` (attractor pipeline design). You don't call them directly — the session routes to the right one based on your question.
+
 ## What it does
 
 The action reads the GitHub event (issue or PR), runs an Amplifier agent session against it, and posts findings back as a comment and/or label. It can run a one-shot prompt or a multi-step recipe. The agent has a bounded capability surface: it can read repo files, post a comment, and add a label. Nothing else.

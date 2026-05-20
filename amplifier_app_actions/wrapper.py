@@ -350,6 +350,13 @@ async def _run_attractor(
     # --- Bundle preparation -------------------------------------------
     # Compose base pipeline bundle with a dot_source overlay, then prepare.
     # prepare() installs loop-pipeline and loop-agent in the Python env.
+    # Each run gets a unique logs_root so loop-pipeline never reuses a
+    # stale checkpoint from a previous run.  The default is a fixed path
+    # (os.path.join(tempfile.gettempdir(), "attractor-pipeline")) which is
+    # reused across runs and causes the engine to replay old results in 0.0s.
+    import tempfile as _tempfile
+    run_logs_root = _tempfile.mkdtemp(prefix="attractor-run-")
+
     with contextlib.chdir(cwd) if cwd else contextlib.nullcontext():
         base_bundle = await load_bundle(bundle_path)
         overlay = Bundle(
@@ -358,7 +365,10 @@ async def _run_attractor(
             session={
                 "orchestrator": {
                     "module": "loop-pipeline",
-                    "config": {"dot_source": dot_source},
+                    "config": {
+                        "dot_source": dot_source,
+                        "logs_root": run_logs_root,
+                    },
                 }
             },
         )
