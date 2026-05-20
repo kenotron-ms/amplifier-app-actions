@@ -4,6 +4,14 @@ import asyncio
 import os
 import sys
 
+# Force line-buffered output so hooks-streaming-ui print() calls appear
+# in GH Actions logs in real-time instead of all dumping at once when
+# the child session completes (Python buffers stdout when not a tty).
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)  # type: ignore[union-attr]
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(line_buffering=True)  # type: ignore[union-attr]
+
 from amplifier_app_actions import wrapper
 
 
