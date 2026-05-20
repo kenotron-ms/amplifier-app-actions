@@ -96,11 +96,13 @@ agents:
         source: git+https://github.com/microsoft/amplifier-module-tool-search@main
       - module: tool-github-add-label
       - module: tool-github-checkout-repo
-      # report_outcome must be available to ALL nodes (including quality_eval
-      # which uses this profile). Without it the model narrates the tool call
-      # as text, _parse_outcome sees plain text → SUCCESS regardless of verdict.
-      - module: tool-report-outcome
-        source: git+https://github.com/microsoft/amplifier-bundle-attractor@main#subdirectory=modules/tool-report-outcome
+      # NOTE: tool-report-outcome is intentionally NOT included.
+      # When it IS available, the model calls it as a tool (turn 1), then the
+      # loop-agent sends the tool result back to the LLM (turn 2), and the
+      # turn-2 prose response replaces the JSON in last_text →
+      # _parse_outcome sees plain text → SUCCESS regardless of the verdict.
+      # Without the tool, quality_eval outputs ONLY the JSON in a single LLM
+      # turn. _parse_outcome reads the JSON → correct FAIL/SUCCESS routing.
 
   pipeline-agent-commenter:
     session:
