@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 from amplifier_app_actions.tools.github_checkout_repo import (
@@ -37,6 +39,7 @@ def test_input_schema_requires_owner_and_repo_not_ref():
 
 async def test_git_clone_called_with_correct_args(monkeypatch):
     """execute() runs git clone --depth 1 --filter=blob:none with correct URL and dest."""
+    shutil.rmtree("/tmp/workspace/test-repo", ignore_errors=True)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)  # ensure no token in URL
     tool = GitHubCheckoutRepoTool({})
     captured: list[list[str]] = []
@@ -62,6 +65,7 @@ async def test_git_clone_called_with_correct_args(monkeypatch):
 
 async def test_github_clone_url_override_redirects_clone(monkeypatch):
     """GITHUB_CLONE_URL=http://localhost:3000 redirects clone to localhost:3000/test-org/test-repo."""
+    shutil.rmtree("/tmp/workspace/test-repo", ignore_errors=True)
     monkeypatch.setenv("GITHUB_CLONE_URL", "http://localhost:3000")
     tool = GitHubCheckoutRepoTool({})
     captured: list[list[str]] = []
@@ -111,6 +115,43 @@ async def test_success_result_contains_path_owner_repo_ref(monkeypatch):
     assert result.output["owner"] == "test-org"
     assert result.output["repo"] == "test-repo"
     assert result.output["ref"] == "main"
+
+
+# ---------------------------------------------------------------------------
+# execute() — destination already exists (cache hit)
+# ---------------------------------------------------------------------------
+
+
+async def test_existing_git_repo_returns_cached_success():
+    """If /tmp/workspace/{repo} already exists and has a .git dir, return success with cached=True."""
+    dest = Path("/tmp/workspace/already-cloned-repo")
+    git_dir = dest / ".git"
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        git_dir.mkdir(exist_ok=True)
+        tool = GitHubCheckoutRepoTool({})
+        result = await tool.execute(
+            {"owner": "test-org", "repo": "already-cloned-repo"}
+        )
+        assert result.success is True
+        assert result.output["cached"] is True
+        assert result.output["path"] == str(dest)
+    finally:
+        shutil.rmtree(dest, ignore_errors=True)
+
+
+async def test_existing_non_git_dir_returns_failure():
+    """If /tmp/workspace/{repo} exists but has no .git dir, return success=False."""
+    dest = Path("/tmp/workspace/not-a-git-repo")
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        # deliberately no .git dir
+        tool = GitHubCheckoutRepoTool({})
+        result = await tool.execute({"owner": "test-org", "repo": "not-a-git-repo"})
+        assert result.success is False
+        assert "not a git repository" in result.output
+    finally:
+        shutil.rmtree(dest, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------

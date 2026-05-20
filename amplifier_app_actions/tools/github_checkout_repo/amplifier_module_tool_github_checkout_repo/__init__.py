@@ -76,6 +76,26 @@ class GitHubCheckoutRepoTool:
         clone_url = self._build_clone_url(owner, repo)
         dest = Path(f"/tmp/workspace/{repo}")
 
+        # If the destination already exists and is a git repo, treat it as a
+        # cache hit — the repo was already checked out earlier in this run.
+        if dest.exists():
+            if (dest / ".git").exists():
+                return ToolResult(
+                    success=True,
+                    output={
+                        "path": str(dest),
+                        "owner": owner,
+                        "repo": repo,
+                        "ref": ref,
+                        "cached": True,
+                    },
+                )
+            return ToolResult(
+                success=False,
+                output=f"Destination {dest} already exists but is not a git repository.",
+                error={"path": str(dest)},
+            )
+
         cmd: list[str] = ["git", "clone", "--depth", "1", "--filter=blob:none"]
         if ref:
             cmd += ["--branch", ref]
@@ -104,6 +124,7 @@ class GitHubCheckoutRepoTool:
                 "owner": owner,
                 "repo": repo,
                 "ref": ref,
+                "cached": False,
             },
         )
 
