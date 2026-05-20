@@ -30,7 +30,6 @@ session:
     config:
       profiles:
         anthropic: pipeline-agent-anthropic
-        anthropic-quality: pipeline-agent-quality
         anthropic-commenter: pipeline-agent-commenter
   context:
     module: context-simple
@@ -97,47 +96,9 @@ agents:
         source: git+https://github.com/microsoft/amplifier-module-tool-search@main
       - module: tool-github-add-label
       - module: tool-github-checkout-repo
-
-  # Quality gate profile — has report_outcome tool so the model can actually
-  # call it (not just write it as text). Without the tool in scope, the model
-  # narrates "report_outcome(status='fail')" as markdown text and _parse_outcome
-  # sees plain text → returns SUCCESS regardless of what the model wrote.
-  pipeline-agent-quality:
-    session:
-      orchestrator:
-        module: loop-agent
-        source: git+https://github.com/microsoft/amplifier-bundle-attractor@main#subdirectory=modules/loop-agent
-        config:
-          max_tool_rounds_per_input: 30
-          default_command_timeout_ms: 120000
-      context:
-        module: context-simple
-        source: git+https://github.com/microsoft/amplifier-module-context-simple@main
-    providers:
-      - module: provider-anthropic
-        source: git+https://github.com/microsoft/amplifier-module-provider-anthropic@main
-        config:
-          default_model: claude-sonnet-4-6
-    hooks:
-      - module: hooks-streaming-ui
-        source: git+https://github.com/microsoft/amplifier-module-hooks-streaming-ui@main
-        config:
-          ui:
-            show_thinking_stream: true
-            show_tool_lines: 30
-            show_token_usage: true
-    tools:
-      - module: tool-filesystem
-        source: git+https://github.com/microsoft/amplifier-module-tool-filesystem@main
-      - module: tool-bash
-        source: git+https://github.com/microsoft/amplifier-module-tool-bash@main
-        config:
-          timeout: 120
-      - module: tool-search
-        source: git+https://github.com/microsoft/amplifier-module-tool-search@main
-      - module: tool-github-checkout-repo
-      # The only tool that matters for routing — without it the model writes
-      # the call as text instead of executing it.
+      # report_outcome must be available to ALL nodes (including quality_eval
+      # which uses this profile). Without it the model narrates the tool call
+      # as text, _parse_outcome sees plain text → SUCCESS regardless of verdict.
       - module: tool-report-outcome
         source: git+https://github.com/microsoft/amplifier-bundle-attractor@main#subdirectory=modules/tool-report-outcome
 
